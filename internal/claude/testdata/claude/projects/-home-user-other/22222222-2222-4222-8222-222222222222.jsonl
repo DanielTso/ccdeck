@@ -1,0 +1,5 @@
+{"type":"user","uuid":"u1","timestamp":"2026-01-09T08:00:00.000Z","cwd":"/home/user/other","gitBranch":"main","version":"2.1.299","isSidechain":false,"message":{"role":"user","content":"Tidy the README"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-01-09T08:00:04.000Z","cwd":"/home/user/other","gitBranch":"main","version":"2.1.299","isSidechain":false,"message":{"id":"msg_x1","model":"claude-unpriced-9","role":"assistant","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":4,"output_tokens":2}}}
+{"type":"ai-title","aiTitle":"README tidy-up","sessionId":"22222222-2222-4222-8222-222222222222"}
+{"type":"custom-title","customTitle":"Docs pass","sessionId":"22222222-2222-4222-8222-222222222222"}
+{"type":"cost-state","totalCostUSD":1.25,"modelUsage":{"claude-unpriced-9":{"inputTokens":4,"outputTokens":2,"costUSD":1.25}},"sessionId":"22222222-2222-4222-8222-222222222222"}

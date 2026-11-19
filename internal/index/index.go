@@ -1,0 +1,300 @@
+// Package index implements core.Store over a Claude directory. At start-up
+// it reads every transcript in a bounded worker pool, continuing from an
+// on-disk cache of derived numbers where it can, and publishes sessions as
+// they complete. After that it keeps them current by watching the files,
+// with a slow poll as a safety net.
+//
+// Concurrency: one goroutine (run) owns the parse state of every session and
+// is the only writer of the published summaries; a second (watch) turns
+// file-system events into pending work for it. The public methods read the
+// published summaries under a mutex and never wait for parsing.
+package index
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+
+	"github.com/DanielTso/ccdeck/internal/claude"
+	"github.com/DanielTso/ccdeck/internal/core"
+)
+
+// Price is what a model costs, in dollars per million tokens (WebSearch is
+// dollars per request).
+type Price = claude.Price
+
+// ErrUnknownSession is returned by Entries for a session id the store does
+// not know.
+var ErrUnknownSession = errors.New("index: unknown session")
+
+// Options configures a Store. Every field is optional.
+type Options struct {
+	// ClaudeDir is the Claude directory. Empty means $CLAUDE_CONFIG_DIR,
+	// else ~/.claude.
+	ClaudeDir string
+	// CacheDir holds the index cache. Empty means $XDG_CACHE_HOME/ccdeck,
+	// else ~/.cache/ccdeck.
+	CacheDir string
+	// Prices maps model ids to prices that override Claude Code's own
+	// price cache, typically the [prices] table of the config file.
+	Prices map[string]Price
+	// Logger receives warnings about unreadable files, failed watches and
+	// cache problems. Nil discards them.
+	Logger *slog.Logger
+}
+
+// Stats describes the start-up scan, for diagnostics.
+type Stats struct {
+	Sessions int           // sessions published, live ones without a transcript included
+	Files    int           // transcripts read, main and subagent
+	Resumed  int           // of Files, those continued from the cache
+	Lines    int           // non-blank transcript lines folded
+	Skipped  int           // malformed lines among them
+	ScanTime time.Duration // from New until every session was published
+	Watches  int           // directories watched now
+	Watching bool          // fsnotify works; false means polling only
+	Cache    string        // the cache file; empty when there is no cache directory
+}
+
+// tuning holds what tests change; New uses defaultTuning.
+type tuning struct {
+	procs    claude.ProcessChecker
+	debounce time.Duration // quiet time collected before acting on file events
+	poll     time.Duration // registry and live-session check
+	sweep    time.Duration // full rescan of every transcript
+	workers  int           // start-up parsers
+	entries  int           // conversations kept for Entries
+	noWatch  bool          // poll and sweep only, as when fsnotify is unavailable
+}
+
+func defaultTuning() tuning {
+	return tuning{
+		procs:    claude.SystemProcesses(),
+		debounce: 100 * time.Millisecond,
+		poll:     2 * time.Second,
+		sweep:    30 * time.Second,
+		workers:  min(max(runtime.GOMAXPROCS(0), 2), 8),
+		entries:  8,
+	}
+}
+
+// Store is a live core.Store over one Claude directory. Create it with New
+// and release it with Close.
+type Store struct {
+	paths     claude.Paths
+	cachePath string // empty when there is no usable cache directory
+	overrides claude.Prices
+	log       *slog.Logger
+	tn        tuning
+	start     time.Time
+	w         *fsnotify.Watcher // nil when watching is unavailable
+
+	// Owned by run. prices is also read by Daily, so run writes it under mu.
+	tracked    map[string]*tracked
+	regs       map[string]claude.Registration
+	catalog    claude.Catalog
+	priceStamp fileStamp
+	scanned    bool // the start-up scan finished
+	dirty      bool // the cache is behind the parse state
+
+	mu     sync.Mutex
+	sums   map[string]published
+	sorted []core.Session // Sessions() order; nil when stale
+	prices claude.Prices
+	stats  Stats
+
+	pmu  sync.Mutex
+	pend pending
+	kick chan struct{}
+
+	subs subscribers
+	conv *convCache
+	hist history
+
+	ready     chan struct{}
+	done      chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// published is what the public methods read for one session.
+type published struct {
+	sum  core.Session
+	days dayBuckets // usage over time, main thread and subagents
+}
+
+var _ core.Store = (*Store)(nil)
+
+// New starts a Store. It returns at once: sessions appear as the start-up
+// scan publishes them, and Ready is closed when the scan is complete.
+func New(opts Options) (*Store, error) {
+	return newStore(opts, defaultTuning())
+}
+
+func newStore(opts Options, tn tuning) (*Store, error) {
+	paths, err := claude.ResolvePaths(opts.ClaudeDir)
+	if err != nil {
+		return nil, err
+	}
+	// Absolute, so that watch event names and cache keys are unambiguous.
+	if paths.Dir, err = filepath.Abs(paths.Dir); err != nil {
+		return nil, err
+	}
+	log := opts.Logger
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	s := &Store{
+		paths:     paths,
+		overrides: claude.Prices(opts.Prices),
+		log:       log,
+		tn:        tn,
+		start:     time.Now(),
+		tracked:   map[string]*tracked{},
+		regs:      map[string]claude.Registration{},
+		sums:      map[string]published{},
+		kick:      make(chan struct{}, 1),
+		conv:      newConvCache(tn.entries),
+		ready:     make(chan struct{}),
+		done:      make(chan struct{}),
+	}
+	if dir, err := cacheDir(opts.CacheDir); err != nil {
+		log.Warn("index: no cache directory", "err", err)
+	} else {
+		s.cachePath = filepath.Join(dir, cacheFileName(paths.Dir))
+	}
+	if !tn.noWatch {
+		if s.w, err = fsnotify.NewWatcher(); err != nil {
+			log.Warn("index: watching unavailable, polling only", "err", err)
+			s.w = nil
+		}
+	}
+
+	s.wg.Add(1)
+	go s.run()
+	if s.w != nil {
+		s.wg.Add(1)
+		go s.watch()
+	}
+	return s, nil
+}
+
+// cacheDir resolves the cache directory: dir, else $XDG_CACHE_HOME/ccdeck,
+// else ~/.cache/ccdeck.
+func cacheDir(dir string) (string, error) {
+	if dir != "" {
+		return dir, nil
+	}
+	if x := os.Getenv("XDG_CACHE_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, "ccdeck"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cache", "ccdeck"), nil
+}
+
+// Ready is closed when the start-up scan has published every session, or
+// when the store is closed first.
+func (s *Store) Ready() <-chan struct{} { return s.ready }
+
+// Stats reports on the start-up scan. It is zero until Ready is closed,
+// apart from Watches, Watching and Cache.
+func (s *Store) Stats() Stats {
+	s.mu.Lock()
+	st := s.stats
+	s.mu.Unlock()
+	if s.w != nil {
+		st.Watching = true
+		st.Watches = len(s.w.WatchList())
+	}
+	st.Cache = s.cachePath
+	return st
+}
+
+// Sessions returns a snapshot of all sessions, most recently active first.
+func (s *Store) Sessions() []core.Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sorted == nil {
+		s.sorted = make([]core.Session, 0, len(s.sums))
+		for _, p := range s.sums {
+			s.sorted = append(s.sorted, p.sum)
+		}
+		slices.SortFunc(s.sorted, func(a, b core.Session) int {
+			if c := b.LastActivity.Compare(a.LastActivity); c != 0 {
+				return c
+			}
+			return strings.Compare(a.ID, b.ID)
+		})
+	}
+	return slices.Clone(s.sorted)
+}
+
+// Session returns one session by id.
+func (s *Store) Session(id string) (core.Session, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.sums[id]
+	return p.sum, ok
+}
+
+// Entries returns up to limit most recent conversation entries of a
+// session's main thread, oldest first; limit <= 0 means all. The
+// conversations of recently viewed sessions are kept and extended as their
+// transcripts grow. A live session with no transcript yet has no entries.
+func (s *Store) Entries(id string, limit int) ([]core.Entry, error) {
+	sum, ok := s.Session(id)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownSession, id)
+	}
+	if sum.Path == "" {
+		return nil, nil
+	}
+	return s.conv.entries(id, sum.Path, limit)
+}
+
+// Subscribe delivers change events until cancel is called or the store is
+// closed, and then closes the channel. Events are coalesced while the
+// subscriber is not reading, and the store never waits for it.
+func (s *Store) Subscribe() (events <-chan core.Event, cancel func()) {
+	return s.subs.subscribe()
+}
+
+// Close stops the watchers and background work, saves the cache, and
+// closes every subscription. It is safe to call more than once.
+func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		if s.w != nil {
+			s.closeErr = s.w.Close()
+		}
+		s.wg.Wait()
+		if s.scanned && s.dirty {
+			s.save() // run has stopped, so its state is ours now
+		}
+		s.subs.closeAll()
+	})
+	return s.closeErr
+}
+
+// closed reports whether Close has been called.
+func (s *Store) closed() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
+}
