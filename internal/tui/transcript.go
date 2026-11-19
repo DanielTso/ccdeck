@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DanielTso/ccdeck/internal/core"
@@ -44,7 +43,7 @@ type transcriptView struct {
 	unseen int  // lines added below while not following
 	sel    int  // selected foldable item, -1 for none
 
-	find    textinput.Model
+	find    textInput
 	finding bool
 	query   string // lower case
 	matches []int  // items containing the query, in order
@@ -73,7 +72,7 @@ type transcriptMsg struct {
 const gutter = 2 // cells left of the text for the selection and match marks
 
 func newTranscriptView(e *env) *transcriptView {
-	t := &transcriptView{env: e, sel: -1, opened: -1, follow: true, find: textinput.New()}
+	t := &transcriptView{env: e, sel: -1, opened: -1, follow: true, find: newTextInput()}
 	t.find.Prompt = "find: "
 	t.find.Placeholder = "text in this transcript"
 	t.find.SetStyles(inputStyles(e.st))
@@ -162,6 +161,10 @@ func (t *transcriptView) Update(msg tea.Msg) tea.Cmd {
 			return t.findKey(msg)
 		}
 		return t.key(msg)
+	case tea.PasteMsg:
+		if t.finding {
+			return t.findEdit(msg)
+		}
 	case tea.MouseWheelMsg:
 		t.scrollBy(wheelDelta(msg))
 	case tea.MouseClickMsg:
@@ -585,6 +588,11 @@ func (t *transcriptView) findKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	return t.findEdit(msg)
+}
+
+// findEdit passes a key or a paste to the find input and searches.
+func (t *transcriptView) findEdit(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	t.find, cmd = t.find.Update(msg)
 	if q := strings.ToLower(strings.TrimSpace(t.find.Value())); q != t.query {

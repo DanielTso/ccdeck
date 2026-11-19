@@ -15,8 +15,10 @@ import (
 )
 
 // StateVersion is the version of the State encoding. RestoreAccumulator
-// rejects a State written with another version.
-const StateVersion = 1
+// rejects a State written with another version. Version 2 added ContextAt;
+// version 3 files usage of the fast and long-prompt tiers under tier keys
+// (see usageKey).
+const StateVersion = 3
 
 // noLine marks a TextOffsets field with no line behind it.
 const noLine = -1
@@ -55,8 +57,11 @@ type State struct {
 	Turns         int                   `json:"turns"`
 	Messages      int                   `json:"messages"`
 	ToolCalls     int                   `json:"toolCalls"`
-	Usage         map[string]core.Usage `json:"usage"`
+	Usage         map[string]core.Usage `json:"usage"` // by usage key: model id plus tier suffix
 	ContextTokens int64                 `json:"contextTokens"`
+	// ContextAt is the time of the latest main-thread assistant line, the
+	// one ContextTokens describes; zero when no such line had a timestamp.
+	ContextAt time.Time `json:"contextAt"`
 
 	// ReportedCost is the last cost-state total. ReportedStale is set when an
 	// assistant message arrived after it (the session was resumed), so the
@@ -76,7 +81,7 @@ type State struct {
 // its usage replaces this one instead of adding to it.
 type LastMessage struct {
 	ID      string     `json:"id"`
-	Model   string     `json:"model"`
+	Model   string     `json:"model"` // the usage key, tier suffix included
 	Usage   core.Usage `json:"usage"`
 	Sampled bool       `json:"sampled"` // the message is the last entry of Recent
 }
@@ -100,13 +105,15 @@ type texts struct {
 // numbers of a session summary. Usage is counted once per message id. It
 // implements Sink. An Accumulator is not safe for concurrent use.
 type Accumulator struct {
-	st      State
-	text    texts
-	onUsage func(at time.Time, model string, u core.Usage)
+	st         State
+	text       texts
+	onUsage    func(at time.Time, model string, u core.Usage)
+	thresholds Thresholds
 }
 
 // OnUsage registers f to be called each time usage is counted, with the
-// model and the amount added. at is the time of the line that carried it,
+// usage key (the model id, plus a tier suffix for fast or long-prompt
+// requests) and the amount added. at is the time of the line that carried it,
 // or the latest activity before it when that line has no timestamp (zero
 // when there is none yet). The amounts add up to State().Usage, which lets
 // a caller spread usage over time. f survives Reset; nil unregisters it.
@@ -130,6 +137,11 @@ func (a *Accumulator) Reset() {
 	}
 	a.text = texts{}
 }
+
+// ContextAt is the time of the latest main-thread assistant line, zero when
+// there is none with a timestamp. A status-line report at least this new
+// describes the conversation as it is now.
+func (a *Accumulator) ContextAt() time.Time { return a.st.ContextAt }
 
 // State returns a copy of the accumulator's serialisable state.
 func (a *Accumulator) State() State {
@@ -344,15 +356,20 @@ func (a *Accumulator) assistant(l *wireLine, t time.Time, main bool) {
 
 	if m.ID != "" && m.ID == st.Last.ID {
 		// Another line of the message already counted: its usage replaces
-		// the earlier line's, so the message is counted once.
+		// the earlier line's, so the message is counted once. The lines of
+		// a message repeat its usage, so the first line's tier key stands.
 		a.addUsage(t, st.Last.Model, sub(u, st.Last.Usage))
 		if st.Last.Sampled && len(st.Recent) > 0 {
 			st.Recent[len(st.Recent)-1].Tokens = u.Fresh()
 		}
 		st.Last.Usage = u
 	} else {
-		a.addUsage(t, model, u)
-		st.Last = LastMessage{ID: m.ID, Model: model, Usage: u}
+		parts := a.tierParts(model, m.Usage, u)
+		for _, p := range parts {
+			a.addUsage(t, p.key, p.u)
+		}
+		// Last.Model is the key a later line's difference is filed under.
+		st.Last = LastMessage{ID: m.ID, Model: parts[0].key, Usage: u}
 		st.ReportedStale = st.ReportedCost > 0
 		if main {
 			st.Messages++
@@ -364,6 +381,9 @@ func (a *Accumulator) assistant(l *wireLine, t time.Time, main bool) {
 	}
 	if !main {
 		return
+	}
+	if t.After(st.ContextAt) {
+		st.ContextAt = t
 	}
 	if !strings.HasPrefix(m.Model, "<") && m.Model != "" {
 		st.Model = m.Model

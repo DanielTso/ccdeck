@@ -685,6 +685,11 @@ func TestCloseDuringScanIsPromptAndCaches(t *testing.T) {
 		t.Skip("writes a large transcript")
 	}
 	e := newEnv(t)
+	// The cold scan of this 20 MB transcript is what the test measures
+	// Close against; under the race detector it takes about 9 s here, so
+	// the harness's usual 5 s bound on start-up does not fit it. The
+	// assertions below are unchanged.
+	e.readyWait = time.Minute
 	ts := time.Now().Add(-time.Hour)
 	var big strings.Builder
 	pad := strings.Repeat("x", 900)

@@ -47,10 +47,12 @@ type Layout struct {
 	GroupByProject bool
 }
 
-// ThemeSpec is a custom theme: a built-in theme with some colour tokens
-// replaced.
+// ThemeSpec is a custom theme: a built-in or another custom theme with some
+// colour tokens replaced.
 type ThemeSpec struct {
-	// Base is the built-in theme to start from. Empty means "ember".
+	// Base is the theme to start from: a built-in or another key of
+	// Options.Themes, which may itself have a base, up to a small depth.
+	// Empty means "ember".
 	Base string
 	// Colors maps token names (see ThemeTokens) to colours written as
 	// "#rrggbb", "#rgb" or an ANSI colour number "0" to "255".

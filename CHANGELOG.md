@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-19
+
 First version.
 
 ### Added
@@ -31,14 +33,19 @@ First version.
   cost reported by Claude Code when present, otherwise estimated from `[prices]` in the config file and from
   Claude Code's own price cache and marked with a tilde; a dash when a model has no known price; context
   percentage from Claude Code's model catalog.
-- Four built-in themes (`ember`, `tidepool`, `paper`, `contrast`), custom themes with a built-in base and colour
-  token overrides, light or dark picked from the terminal background, and `NO_COLOR` support. Status is always
+- Four built-in themes (`ember`, `tidepool`, `paper`, `contrast`), custom themes with colour token overrides on a
+  base that is a built-in or another custom theme (up to five custom themes in a chain; a cycle, an unknown base or
+  a chain that is too deep is an error naming the config key), light or dark picked from the terminal background, and `NO_COLOR` support. Status is always
   shown with a glyph and a word as well as a colour.
 - Configuration file at `$XDG_CONFIG_HOME/ccdeck/config.toml` (`~/.config/ccdeck/config.toml`): `theme`,
   `[layout]`, `[resume]`, `[keys]`, `[themes.<name>]` and `[prices."<model>"]`. Unknown keys and bad values are
   errors that name the key.
-- Commands `ccdeck list [--json] [--live]`, `ccdeck show <id> [--json] [-n N]`, `ccdeck doctor`,
-  `ccdeck version` and shell completion; flags `--claude-dir`, `--config`, `--theme` and `--demo`.
+- Commands `ccdeck list [--json] [--live]`, `ccdeck show <id> [--json] [-n N | --entries N]`, `ccdeck doctor`,
+  `ccdeck version` (also `-v` and `--version`) and `ccdeck completion <shell>`; flags `--claude-dir`, `--config`,
+  `--theme` and `--demo`.
+- The version and commit come from the build flags that `make install` and the release archives set, and from the
+  build information Go records in the binary otherwise, so a plain `go install` reports its module version, or the
+  commit it was built from (marked `-dirty` for uncommitted changes), instead of `dev (none)`.
 - `ccdeck doctor` reports the Claude directory, index scan results including skipped lines, live sessions, tmux,
   the `claude` binary, the config file and the colour profile, and prints an example config. It is the first thing
   to run when numbers look wrong.
@@ -46,3 +53,33 @@ First version.
 - A Claude directory that does not exist or cannot be read is an error naming it, not an empty list.
 - A cache of derived numbers (no conversation text) in `$XDG_CACHE_HOME/ccdeck` makes later start-ups fast.
 - GoReleaser archives for Linux and macOS (amd64 and arm64) containing the license, README and changelog.
+- Opt-in status-line meter. `ccdeck statusline` is a Claude Code status-line command: it records Claude Code's own
+  context figure, running cost and the account's rate limits (5-hour, 7-day and spend windows) in
+  `$XDG_STATE_HOME/ccdeck/meter/<session id>.json` (numbers only, mode 0600, replaced atomically) and prints a
+  status line fitted to `COLUMNS`. `--wrap '<command>'` keeps an existing status line; a wrapped command that
+  fails, prints nothing or outlives `--wrap-timeout` is stopped with everything it started and ccdeck's own line is
+  printed, and one that succeeds keeps its background jobs and its output, even when a job holds stdout open. The helper always
+  exits 0 with a line and takes a few milliseconds. ccdeck never edits Claude Code's settings; `ccdeck doctor`
+  reports whether the meter is feeding and prints the setting when it is not.
+- With the meter on, a session's context and cost are Claude Code's own when its report is at least as new as the
+  latest reply (cost kind `claude`, shown as "Claude Code's estimate"); a cost recorded at the end of the session
+  still wins. The top bar shows the tightest rate-limit window with its reset time, and the Usage view lists every
+  window; a window at 80% or more is marked with `!`. Rate limits come only from the reports of sessions in the
+  Claude directory being read, and each window shows the highest use reported for it (or a later window), not the
+  newest report's figure, which an idle session re-reports long after it was current. Without the meter nothing changes. Reports of sessions no
+  longer running are deleted after 30 days. `ccdeck show` prints the last report; `list --json` includes it.
+- Estimated cost respects the price tiers in Claude Code's price cache. A response served in fast mode
+  (`usage.speed` `fast`) is priced at the model's fast rates, and a response whose prompt (input plus cache reads
+  and writes) is above the model's `longPrompt.abovePromptTokens` at its long-prompt rates, request by request when
+  the response lists its requests. Usage is kept per tier under keys such as `claude-opus-5-5+fast`, shown as
+  `opus 5.5 fast` in the Usage view's model table and as `claude-opus-5-5 (fast)` by `ccdeck show`; the session's
+  model stays the plain id. A tier with no rates of its own, a response both fast and long, and a speed ccdeck does
+  not know have no price, so such a session shows tokens only rather than a figure at the base rate. `[prices]` may
+  name `+fast`, `+long` and `+fast+long` keys. `ccdeck doctor` counts the models with tier rates and lists the
+  tiers used and whether each is priced. The index cache is rebuilt once, and again whenever a long-prompt
+  threshold changes. Not modelled: Claude Code's 10% surcharge on US-only inference.
+- `--demo` includes invented meter figures and rate limits.
+- Text inputs (filter, prompt search, find) of ccdeck's own, so that every ccdeck process, the status-line helper
+  included, starts in a few milliseconds on WSL: the clipboard package behind Bubbles' input searched `PATH`,
+  Windows directories included, for clipboard tools at start-up, which took up to half a second. Pasting works
+  through the terminal's bracketed paste; `ctrl+v` does not read the system clipboard itself.

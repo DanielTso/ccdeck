@@ -27,6 +27,7 @@ import (
 
 	"github.com/DanielTso/ccdeck/internal/claude"
 	"github.com/DanielTso/ccdeck/internal/core"
+	"github.com/DanielTso/ccdeck/internal/meter"
 )
 
 // Price is what a model costs, in dollars per million tokens (WebSearch is
@@ -49,9 +50,14 @@ type Options struct {
 	// CacheDir holds the index cache. Empty means $XDG_CACHE_HOME/ccdeck,
 	// else ~/.cache/ccdeck.
 	CacheDir string
-	// Prices maps model ids to prices that override Claude Code's own
-	// price cache, typically the [prices] table of the config file.
+	// Prices maps usage keys (model ids, or model ids with a tier suffix
+	// such as "+fast"; see claude.Prices) to prices that override Claude
+	// Code's own price cache, typically the [prices] table of the config
+	// file.
 	Prices map[string]Price
+	// MeterDir is the status-line meter's state directory (see package
+	// meter). Empty means the meter is off: no reports, no limits.
+	MeterDir string
 	// Logger receives warnings about unreadable files, failed watches and
 	// cache problems. Nil discards them.
 	Logger *slog.Logger
@@ -104,6 +110,7 @@ func defaultTuning() tuning {
 type Store struct {
 	paths     claude.Paths
 	cachePath string // empty when there is no usable cache directory
+	meterDir  string // empty when the meter is off
 	overrides claude.Prices
 	log       *slog.Logger
 	tn        tuning
@@ -115,17 +122,25 @@ type Store struct {
 	regs       map[string]claude.Registration
 	catalog    claude.Catalog
 	priceStamp fileStamp
+	// thresholds are the long-prompt thresholds every accumulator files
+	// usage with; the start-up workers read them, run replaces them.
+	thresholds claude.Thresholds
 	scanned    bool // the start-up scan finished
 	dirty      bool // the cache is behind the parse state
 	// prevCache is the cache read at start-up, until the scan completes:
 	// a save before then keeps the entries of transcripts not read yet.
 	prevCache map[string]cachedFile
+	// meters are the status-line reports by session id; meterWatched is
+	// set once the meter directory is watched.
+	meters       map[string]meterFile
+	meterWatched bool
 
 	mu     sync.Mutex
 	sums   map[string]published
 	sorted []core.Session // Sessions() order; nil when stale
 	prices claude.Prices
 	stats  Stats
+	limits limitsReport // the rate limits of this store's sessions' reports
 
 	pmu  sync.Mutex
 	pend pending
@@ -182,11 +197,19 @@ func newStore(opts Options, tn tuning) (*Store, error) {
 		start:     time.Now(),
 		tracked:   map[string]*tracked{},
 		regs:      map[string]claude.Registration{},
+		meters:    map[string]meterFile{},
+		meterDir:  opts.MeterDir,
 		sums:      map[string]published{},
 		kick:      make(chan struct{}, 1),
 		conv:      newConvCache(tn.entries),
 		ready:     make(chan struct{}),
 		done:      make(chan struct{}),
+	}
+	if s.meterDir != "" {
+		// Absolute, so that watch event names compare.
+		if s.meterDir, err = filepath.Abs(s.meterDir); err != nil {
+			return nil, err
+		}
 	}
 	s.ctx, s.stop = context.WithCancel(context.Background())
 	if dir, err := cacheDir(opts.CacheDir); err != nil {
@@ -304,6 +327,21 @@ func (s *Store) Entries(id string, limit int) ([]core.Entry, error) {
 		return nil, nil
 	}
 	return s.conv.entries(id, sum.Path, limit)
+}
+
+// Limits returns the rate-limit windows of the newest status-line report
+// that has any, without the windows whose reset time has passed, and when
+// that report was written. Both are zero when the meter is off, has never
+// run, or every window has reset.
+func (s *Store) Limits() ([]core.RateLimit, time.Time) {
+	s.mu.Lock()
+	l := s.limits
+	s.mu.Unlock()
+	cur := meter.Current(l.limits, time.Now())
+	if len(cur) == 0 {
+		return nil, time.Time{}
+	}
+	return cur, l.at
 }
 
 // Subscribe delivers change events until cancel is called or the store is

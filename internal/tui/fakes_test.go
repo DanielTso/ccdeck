@@ -17,6 +17,8 @@ type fakeStore struct {
 	sessions []core.Session
 	entries  map[string][]core.Entry
 	days     []core.DayUsage
+	limits   []core.RateLimit
+	limitsAt time.Time
 
 	entriesCalls, dailyCalls, searchCalls atomic.Int64
 }
@@ -64,6 +66,12 @@ func (f *fakeStore) Daily(int) []core.DayUsage {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]core.DayUsage(nil), f.days...)
+}
+
+func (f *fakeStore) Limits() ([]core.RateLimit, time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]core.RateLimit(nil), f.limits...), f.limitsAt
 }
 
 func (f *fakeStore) Subscribe() (<-chan core.Event, func()) {

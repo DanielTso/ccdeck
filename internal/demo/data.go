@@ -88,7 +88,7 @@ var specs = []spec{
 		title: "Refactor the rate limiter to use a token bucket per tenant and add metrics for rejected requests",
 		model: opus, ago: 40 * time.Second, length: 95 * time.Minute,
 		status: core.StatusBusy, pid: 41207, name: "orbit-api-3",
-		context: 124_300, window: window, cost: core.CostEstimated, turns: 6, active: true,
+		context: 124_300, window: window, cost: core.CostClaude, turns: 6, active: true,
 		agents: []agentSpec{
 			agent("Explore", "Find every caller of Limiter.Allow", haiku),
 			agent("general-purpose", "Draft metric names that follow the existing conventions", sonnet),
@@ -118,7 +118,7 @@ var specs = []spec{
 		model: sonnet, ago: 3 * time.Minute, length: 22 * time.Minute,
 		status: core.StatusWaiting, pid: 41388, name: "orbit-api-4",
 		waitingFor: "approve Bash: go test ./internal/payments/... -run TestRefund -count=200 -race",
-		context:    58_900, window: window, cost: core.CostEstimated, turns: 2, active: true,
+		context:    58_900, window: window, cost: core.CostClaude, turns: 2, active: true,
 		convo: []line{
 			prompt("TestRefund fails about one run in twenty on CI. Find out why and fix it properly, no retries."),
 			say("Let me reproduce it locally by running the test many times."),

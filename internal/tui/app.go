@@ -108,6 +108,7 @@ func New(opts Options) (*Model, error) {
 		previewDelay: previewDelay,
 		ready:        opts.Ready == nil,
 	}
+	m.env.limits, m.env.limitsAt = opts.Store.Limits()
 	m.ready = opts.Ready
 	m.views = [4]view{
 		newSessionsView(m.env),
@@ -210,6 +211,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.env.ready, m.ready = true, nil
 		return m, m.refresh()
 	case clockMsg:
+		// Windows reset on the clock, not on store events.
+		m.env.limits, m.env.limitsAt = m.env.store.Limits()
 		return m, tickClock()
 	case statusMsg:
 		m.statusID++
@@ -346,9 +349,11 @@ func (m *Model) storeEvent(ev core.Event) tea.Cmd {
 	return nil
 }
 
-// refresh replaces the session snapshot and tells the views.
+// refresh replaces the session snapshot and the rate limits, and tells
+// the views.
 func (m *Model) refresh() tea.Cmd {
 	m.env.sessions = m.env.store.Sessions()
+	m.env.limits, m.env.limitsAt = m.env.store.Limits()
 	return m.broadcast(sessionsMsg{})
 }
 
@@ -415,11 +420,25 @@ func (m *Model) header() string {
 		left += st.faint.Render("›") + " " + st.tabActive.Render(viewTitles[viewTranscript])
 	}
 
-	right := m.counts(false) + " "
-	if width(left)+width(right) > m.width {
-		right = m.counts(true) + " "
-	}
-	if width(left)+width(right) > m.width {
+	// The right side gives way step by step: the counts lose their words,
+	// the rate-limit badge its reset time and then the room around it, then
+	// the badge goes, then the counts. The counts keep the right edge, and
+	// at least a space separates the sides.
+	right := ""
+	for _, try := range []struct{ badge, sep, counts string }{
+		{m.limitBadge(true), "  ", m.counts(false)},
+		{m.limitBadge(true), "  ", m.counts(true)},
+		{m.limitBadge(false), "  ", m.counts(true)},
+		{m.limitBadge(false), " ", m.counts(true)},
+		{"", "", m.counts(true)},
+	} {
+		right = try.counts + " "
+		if try.badge != "" {
+			right = try.badge + st.faint.Render(try.sep) + right
+		}
+		if width(left)+1+width(right) <= m.width {
+			break
+		}
 		right = ""
 	}
 	gap := max(0, m.width-width(left)-width(right))

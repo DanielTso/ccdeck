@@ -60,7 +60,7 @@ func cost(usd float64, kind core.CostKind) string {
 	switch kind {
 	case core.CostReported:
 		return fmt.Sprintf("$%.2f", usd)
-	case core.CostEstimated:
+	case core.CostEstimated, core.CostClaude:
 		return fmt.Sprintf("~$%.2f", usd)
 	}
 	return "-"
@@ -73,6 +73,8 @@ func costLong(usd float64, kind core.CostKind) string {
 		return cost(usd, kind) + " reported"
 	case core.CostEstimated:
 		return cost(usd, kind) + " estimate"
+	case core.CostClaude:
+		return cost(usd, kind) + " estimate by Claude Code"
 	}
 	return "unknown (no price for the model)"
 }
@@ -135,4 +137,31 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// meterSummary is a status-line report in one line: what Claude Code said
+// about the session's context and cost, and when.
+func meterSummary(m core.Meter, now time.Time) string {
+	var parts []string
+	if m.HasContext {
+		p := fmt.Sprintf("context %.0f%%", m.ContextPercent)
+		if m.ContextWindow > 0 {
+			p += " of " + tokens(m.ContextWindow)
+		}
+		parts = append(parts, p)
+	}
+	parts = append(parts, fmt.Sprintf("~$%.2f", m.CostUSD), fmt.Sprintf("+%d -%d lines", m.LinesAdded, m.LinesRemoved))
+	return "Claude Code reported " + strings.Join(parts, ", ") + " " + ago(m.At, now)
+}
+
+// ago is age in a sentence: "just now", "5m ago".
+func ago(t, now time.Time) string {
+	switch a := age(t, now); a {
+	case "now":
+		return "just now"
+	case "-":
+		return a
+	default:
+		return a + " ago"
+	}
 }

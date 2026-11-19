@@ -217,13 +217,15 @@ func (v *usageView) ensureVisible() {
 	v.offset = min(max(v.offset, 0), max(len(v.rows)-n, 0))
 }
 
-// Layout. From the top: the totals, the days, the models and the session
-// table, which takes the rest. When the window is short the days and then
-// the models give way, so the table keeps a few rows.
+// Layout. From the top: the totals, the rate limits (only when Claude
+// Code's status-line meter reports them), the days, the models and the
+// session table, which takes the rest. When the window is short the days,
+// then the models, then the rate limits give way, so the table keeps a few
+// rows.
 
 type usageLayout struct {
-	days, models bool
-	tableTop     int // line of the first session row
+	limits, days, models bool
+	tableTop             int // line of the first session row
 }
 
 const (
@@ -233,9 +235,13 @@ const (
 
 func (v *usageView) layout() usageLayout {
 	models := min(len(v.modelNames()), 4)
-	lay := usageLayout{days: true, models: true}
+	limits := len(v.env.currentLimits())
+	lay := usageLayout{limits: limits > 0, days: true, models: true}
 	height := func() int {
 		n := 3 // totals and a blank line
+		if lay.limits {
+			n += 2 + limits // title, windows, blank
+		}
 		if lay.days {
 			n += 4 // title, labels, bars, blank
 		}
@@ -249,6 +255,9 @@ func (v *usageView) layout() usageLayout {
 	}
 	if v.h-height() < minTableRows {
 		lay.models = false
+	}
+	if v.h-height() < minTableRows {
+		lay.limits = false
 	}
 	lay.tableTop = height()
 	return lay
@@ -270,6 +279,10 @@ func (v *usageView) View() string {
 	var lines []string
 	lines = append(lines, v.totals()...)
 	lines = append(lines, "")
+	if lay.limits {
+		lines = append(lines, v.limitsLines()...)
+		lines = append(lines, "")
+	}
 	if lay.days {
 		lines = append(lines, v.dayBars()...)
 		lines = append(lines, "")
@@ -455,7 +468,12 @@ func (v *usageView) modelTable(n int) []string {
 		{"output 7d", 11, func(m string) string { return fmtTokens(week[m].Output) }},
 		{"cache read 7d", 15, func(m string) string { return fmtTokens(week[m].CacheRead) }},
 	}
+	// Wide enough for the longest name shown, tier words included, within
+	// limits; the columns on the right give way first.
 	nameW := min(max(v.w/5, 10), 22)
+	for _, m := range v.modelNames()[:n] {
+		nameW = max(nameW, min(width(shortModel(m))+1, 22, v.w/3))
+	}
 	shareW := 0
 	for {
 		used := 1 + nameW

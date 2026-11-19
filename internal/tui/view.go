@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/DanielTso/ccdeck/internal/core"
@@ -75,6 +74,11 @@ type env struct {
 	// sessions is the latest snapshot, most recently active first. Views
 	// must not modify it.
 	sessions []core.Session
+
+	// limits are the account's rate-limit windows from the store, and
+	// limitsAt when they were reported; empty when the store has none.
+	limits   []core.RateLimit
+	limitsAt time.Time
 
 	// previewDelay debounces loading entries while the selection moves.
 	previewDelay time.Duration
@@ -211,16 +215,13 @@ func where(s core.Session) string {
 }
 
 // inputStyles styles a text input from the theme.
-func inputStyles(st styles) textinput.Styles {
-	s := textinput.DefaultStyles(st.theme.dark)
-	for _, state := range []*textinput.StyleState{&s.Focused, &s.Blurred} {
-		state.Prompt = st.accent
-		state.Text = st.text
-		state.Placeholder = st.muted
+func inputStyles(st styles) textInputStyles {
+	return textInputStyles{
+		Prompt:      st.accent,
+		Text:        st.text,
+		Placeholder: st.muted,
+		Cursor:      st.accent.Reverse(true),
 	}
-	s.Cursor.Color = st.theme.accent
-	s.Cursor.Blink = false
-	return s
 }
 
 // hint is a footer-only binding for keys that are not configurable, such

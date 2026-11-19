@@ -201,7 +201,8 @@ func fmtTokens(n int64) string {
 	}
 }
 
-// fmtCost shows a cost, marking estimates with "~" and unknowns with "—".
+// fmtCost shows a cost, marking estimates (Claude Code's own running figure
+// is one too) with "~" and unknowns with "—".
 func fmtCost(kind core.CostKind, usd float64) string {
 	var s string
 	switch {
@@ -212,15 +213,33 @@ func fmtCost(kind core.CostKind, usd float64) string {
 	default:
 		s = fmt.Sprintf("$%.2f", usd)
 	}
-	if kind == core.CostEstimated {
+	if kind == core.CostEstimated || kind == core.CostClaude {
 		s = "~" + s
 	}
 	return s
 }
 
 // shortModel turns "claude-opus-5-5" into "opus 5.5" and drops date
-// suffixes. Ids it does not recognise come back unchanged.
-func shortModel(id string) string {
+// suffixes. Ids it does not recognise come back unchanged. A usage key's
+// price tier becomes a word: "claude-opus-5-5+fast" is "opus 5.5 fast",
+// "+long" (a long prompt) is "long", and "+unknown" (a speed ccdeck does
+// not know) is "speed?".
+func shortModel(key string) string {
+	id, tiers, _ := strings.Cut(key, "+")
+	s := shortModelID(id)
+	if tiers == "" {
+		return s
+	}
+	for t := range strings.SplitSeq(tiers, "+") {
+		if t == "unknown" {
+			t = "speed?"
+		}
+		s += " " + t
+	}
+	return s
+}
+
+func shortModelID(id string) string {
 	s, ok := strings.CutPrefix(id, "claude-")
 	if !ok {
 		return id

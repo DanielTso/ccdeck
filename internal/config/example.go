@@ -43,7 +43,9 @@ claude = "claude"
 # accent = "#ff8800"
 
 # Price overrides in dollars per million tokens, used to estimate cost when
-# Claude Code did not record one. Add one table per model id.
+# Claude Code did not record one. Add one table per model id; a model id
+# ending in +fast, +long or +fast+long prices that model's fast-mode or
+# long-prompt usage, which otherwise has the rates in Claude Code's cache.
 # [prices."example-model"]
 # input = 3.0
 # output = 15.0

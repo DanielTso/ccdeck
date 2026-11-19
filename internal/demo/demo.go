@@ -38,6 +38,8 @@ type Store struct {
 	subs     map[int]chan core.Event
 	nextSub  int
 	closed   bool
+	limits   []core.RateLimit
+	limitsAt time.Time
 
 	stop chan struct{}
 	done chan struct{}
@@ -71,6 +73,7 @@ func New(opts Options) *Store {
 		st.sessions = append(st.sessions, st.build(sp, now))
 	}
 	st.seedHistory(now)
+	st.limits, st.limitsAt = demoLimits(now), now.Add(-20*time.Second)
 	if opts.Interval > 0 {
 		st.stop = make(chan struct{})
 		st.done = make(chan struct{})
@@ -177,6 +180,24 @@ func (st *Store) Daily(days int) []core.DayUsage {
 	return out
 }
 
+// Limits returns the invented rate-limit windows that have not reset, and
+// when they were reported.
+func (st *Store) Limits() ([]core.RateLimit, time.Time) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	now := st.now()
+	var out []core.RateLimit
+	for _, l := range st.limits {
+		if l.ResetsAt.After(now) {
+			out = append(out, l)
+		}
+	}
+	if len(out) == 0 {
+		return nil, time.Time{}
+	}
+	return out, st.limitsAt
+}
+
 // Subscribe delivers change events until cancel is called. Events are
 // dropped, never queued without bound, when the subscriber falls behind.
 func (st *Store) Subscribe() (<-chan core.Event, func()) {
@@ -232,6 +253,14 @@ func (st *Store) Step() {
 		return
 	}
 	now := st.now()
+	// A window that resets starts again, as the account's would.
+	for i, l := range st.limits {
+		if !l.ResetsAt.After(now) {
+			fresh := demoLimits(now)[i]
+			fresh.UsedPercent = 3
+			st.limits[i], st.limitsAt = fresh, now
+		}
+	}
 	var changed []string
 	for _, x := range st.sessions {
 		if x.active && st.advance(x, now) {
@@ -279,6 +308,10 @@ func clone(s core.Session) core.Session {
 	if s.Live != nil {
 		l := *s.Live
 		s.Live = &l
+	}
+	if s.Meter != nil {
+		m := *s.Meter
+		s.Meter = &m
 	}
 	return s
 }

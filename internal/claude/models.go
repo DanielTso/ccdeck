@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,15 +12,22 @@ import (
 
 // lookupModel finds model in m: an exact key first, else the longest key
 // that is a prefix of model and ends at a word boundary, so that
-// "claude-x-1" matches "claude-x-1-20260101" but not "claude-x-10".
+// "claude-x-1" matches "claude-x-1-20260101" but not "claude-x-10". A tier
+// suffix must match exactly: "claude-x-1+fast" matches
+// "claude-x-1-20260101+fast", never "claude-x-1-20260101" or
+// "claude-x-1-20260101+long".
 func lookupModel[V any](m map[string]V, model string) (V, bool) {
 	if v, ok := m[model]; ok {
 		return v, true
 	}
-	var best string
+	tier := tierOf(model)
+	model = model[:len(model)-len(tier)]
+	var best, bestModel string
 	for k := range m {
-		if len(k) > len(best) && len(k) < len(model) && strings.HasPrefix(model, k) && !isWordByte(model[len(k)]) {
-			best = k
+		km := stripTier(k)
+		if len(km) > len(bestModel) && len(km) < len(model) && strings.HasPrefix(model, km) &&
+			!isWordByte(model[len(km)]) && tierOf(k) == tier {
+			best, bestModel = k, km
 		}
 	}
 	if best == "" {
@@ -39,7 +47,7 @@ type Catalog map[string]int64
 // Window returns the context-window size for model, matched exactly and
 // then by prefix, or 0 when the model is unknown.
 func (c Catalog) Window(model string) int64 {
-	w, _ := lookupModel(c, model)
+	w, _ := lookupModel(c, stripTier(model))
 	return w
 }
 
@@ -103,17 +111,20 @@ func (p Price) Cost(u core.Usage) float64 {
 		float64(u.WebSearches)*p.WebSearch
 }
 
-// Prices maps model ids to prices. Build it from ReadPrices and copy the
-// config file's prices over it, so the config wins.
+// Prices maps usage keys to prices: model ids, and model ids with a tier
+// suffix ("claude-x+fast") for the rates of a tier. Build it from
+// ReadPrices and copy the config file's prices over it, so the config wins.
 type Prices map[string]Price
 
-// Lookup returns the price for model, matched exactly and then by prefix.
-func (p Prices) Lookup(model string) (Price, bool) {
-	return lookupModel(p, model)
+// Lookup returns the price for a usage key, matched exactly and then by
+// prefix of the model id. A tier with no price of its own has no price:
+// it never falls back to the base rate.
+func (p Prices) Lookup(key string) (Price, bool) {
+	return lookupModel(p, key)
 }
 
-// Estimate prices usage by model. ok is false when usage is empty or any
-// model with tokens has no price: a partial figure would look complete.
+// Estimate prices usage by usage key. ok is false when usage is empty or
+// any key with tokens has no price: a partial figure would look complete.
 func (p Prices) Estimate(usage map[string]core.Usage) (cost float64, ok bool) {
 	for model, u := range usage {
 		if u == (core.Usage{}) {
@@ -129,37 +140,82 @@ func (p Prices) Estimate(usage map[string]core.Usage) (cost float64, ok bool) {
 	return cost, ok
 }
 
+// wireCosts is one entry of additionalModelCostsCache, or one of its tiers,
+// in dollars per million tokens (per request for web searches).
+type wireCosts struct {
+	InputTokens              float64  `json:"inputTokens"`
+	OutputTokens             float64  `json:"outputTokens"`
+	PromptCacheWriteTokens   float64  `json:"promptCacheWriteTokens"`
+	PromptCacheWrite1hTokens float64  `json:"promptCacheWrite1hTokens"`
+	PromptCacheReadTokens    float64  `json:"promptCacheReadTokens"`
+	WebSearchRequests        *float64 `json:"webSearchRequests"`
+}
+
+func (c *wireCosts) price(webSearch float64) Price {
+	return Price{
+		Input:        c.InputTokens,
+		Output:       c.OutputTokens,
+		CacheRead:    c.PromptCacheReadTokens,
+		CacheWrite5m: c.PromptCacheWriteTokens,
+		CacheWrite1h: c.PromptCacheWrite1hTokens,
+		WebSearch:    webSearch,
+	}
+}
+
 // ReadPrices reads the additionalModelCostsCache key of Claude Code's
-// global config file (Paths.ConfigFile) and nothing else from it. A
-// missing file is an error satisfying errors.Is(err, fs.ErrNotExist).
-func ReadPrices(configFile string) (Prices, error) {
+// global config file (Paths.ConfigFile) and nothing else from it. A model's
+// "fast" rates become the price of "<model>+fast" and its "longPrompt"
+// rates the price of "<model>+long", with the threshold in thresholds.
+// Web searches cost the same in every tier (the base or fast rate, as
+// Claude Code charges them). A malformed tier, or a long tier without a
+// positive threshold, is left out. A missing file is an error satisfying
+// errors.Is(err, fs.ErrNotExist).
+func ReadPrices(configFile string) (prices Prices, thresholds Thresholds, err error) {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	type entry struct {
+		wireCosts
+		Fast       json.RawMessage `json:"fast"`
+		LongPrompt json.RawMessage `json:"longPrompt"`
+	}
+	type long struct {
+		wireCosts
+		AbovePromptTokens float64 `json:"abovePromptTokens"`
 	}
 	var doc struct {
-		Costs map[string]struct {
-			InputTokens              float64 `json:"inputTokens"`
-			OutputTokens             float64 `json:"outputTokens"`
-			PromptCacheWriteTokens   float64 `json:"promptCacheWriteTokens"`
-			PromptCacheWrite1hTokens float64 `json:"promptCacheWrite1hTokens"`
-			PromptCacheReadTokens    float64 `json:"promptCacheReadTokens"`
-			WebSearchRequests        float64 `json:"webSearchRequests"`
-		} `json:"additionalModelCostsCache"`
+		Costs map[string]json.RawMessage `json:"additionalModelCostsCache"`
 	}
 	if err := decodeTolerant(data, &doc); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", configFile, err)
+		return nil, nil, fmt.Errorf("decode %s: %w", configFile, err)
 	}
-	p := make(Prices, len(doc.Costs))
-	for model, c := range doc.Costs {
-		p[model] = Price{
-			Input:        c.InputTokens,
-			Output:       c.OutputTokens,
-			CacheRead:    c.PromptCacheReadTokens,
-			CacheWrite5m: c.PromptCacheWriteTokens,
-			CacheWrite1h: c.PromptCacheWrite1hTokens,
-			WebSearch:    c.WebSearchRequests,
+	prices = make(Prices, len(doc.Costs))
+	thresholds = Thresholds{}
+	for model, raw := range doc.Costs {
+		var c entry
+		if decodeTolerant(raw, &c) != nil {
+			continue
+		}
+		var web float64
+		if c.WebSearchRequests != nil {
+			web = *c.WebSearchRequests
+		}
+		prices[model] = c.price(web)
+		var f wireCosts
+		if len(c.Fast) > 0 && decodeTolerant(c.Fast, &f) == nil {
+			fastWeb := web
+			if f.WebSearchRequests != nil {
+				fastWeb = *f.WebSearchRequests
+			}
+			prices[model+"+"+tierFast] = f.price(fastWeb)
+		}
+		var l long
+		if len(c.LongPrompt) > 0 && decodeTolerant(c.LongPrompt, &l) == nil &&
+			l.AbovePromptTokens >= 1 && l.AbovePromptTokens < 1<<62 {
+			prices[model+"+"+tierLong] = l.price(web)
+			thresholds[model] = int64(l.AbovePromptTokens)
 		}
 	}
-	return p, nil
+	return prices, thresholds, nil
 }

@@ -25,7 +25,7 @@ func NewRootCmd() *cobra.Command {
 		Long: `ccdeck is a companion to Claude Code. It reads the files Claude Code keeps
 under ~/.claude, shows every session across every project, follows the live
 ones, and hands the terminal to claude when you want to resume one.`,
-		Version:       version + " (" + commit + ")",
+		Version:       versionString(),
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		Args:          cobra.NoArgs,
@@ -39,7 +39,7 @@ ones, and hands the terminal to claude when you want to resume one.`,
 	flags.String("theme", "", "colour theme, overriding the config file")
 	flags.Bool("demo", false, "use synthetic demo data instead of reading the Claude directory")
 
-	root.AddCommand(newListCmd(), newShowCmd(), newDoctorCmd(), newVersionCmd())
+	root.AddCommand(newListCmd(), newShowCmd(), newDoctorCmd(), newStatuslineCmd(), newVersionCmd())
 	return root
 }
 

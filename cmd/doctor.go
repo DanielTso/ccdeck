@@ -6,9 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
+	"maps"
+	"math"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,7 +21,9 @@ import (
 
 	"github.com/DanielTso/ccdeck/internal/claude"
 	"github.com/DanielTso/ccdeck/internal/config"
+	"github.com/DanielTso/ccdeck/internal/core"
 	"github.com/DanielTso/ccdeck/internal/index"
+	"github.com/DanielTso/ccdeck/internal/meter"
 )
 
 func newDoctorCmd() *cobra.Command {
@@ -37,7 +43,7 @@ Run it first when Claude Code changes a file format.`,
 				return err
 			}
 			w := cmd.OutOrStdout()
-			_, _ = fmt.Fprintf(w, "ccdeck %s (%s)\n", version, commit)
+			_, _ = fmt.Fprintf(w, "ccdeck %s\n", versionString())
 			if s.demo {
 				_, _ = fmt.Fprintln(w, "\n--demo is ignored here: doctor always inspects the Claude directory.")
 			}
@@ -102,11 +108,16 @@ func doctorClaudeDir(ctx context.Context, w io.Writer, s settings, cfg config.Co
 	} else {
 		row("model catalog", "%d models with a context-window size", len(cat))
 	}
-	if prices, err := claude.ReadPrices(p.ConfigFile); err != nil {
+	prices, thresholds, err := claude.ReadPrices(p.ConfigFile)
+	if err != nil {
 		row("prices", "unreadable: %v", err)
 	} else {
-		row("prices", "%d models priced in %s, %d in the config file", len(prices), tildePath(p.ConfigFile), len(cfg.Prices))
+		row("prices", "%s in %s, %d in the config file", priceCounts(prices, thresholds), tildePath(p.ConfigFile), len(cfg.Prices))
 	}
+	if prices == nil {
+		prices = claude.Prices{}
+	}
+	maps.Copy(prices, indexPrices(cfg.Prices))
 
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
@@ -117,7 +128,7 @@ func doctorClaudeDir(ctx context.Context, w io.Writer, s settings, cfg config.Co
 			return a
 		},
 	}))
-	st, err := index.New(index.Options{ClaudeDir: s.claudeDir, Prices: indexPrices(cfg.Prices), Logger: log})
+	st, err := index.New(index.Options{ClaudeDir: s.claudeDir, Prices: indexPrices(cfg.Prices), MeterDir: meterDir(), Logger: log})
 	if errors.Is(err, index.ErrClaudeDir) {
 		_, _ = fmt.Fprintln(w, "\nIndex")
 		row("status", "not run: %v", err)
@@ -132,6 +143,7 @@ func doctorClaudeDir(ctx context.Context, w io.Writer, s settings, cfg config.Co
 	}
 	stats := st.Stats()
 	sessions := st.Sessions()
+	limits, limitsAt := st.Limits()
 	if err := st.Close(); err != nil {
 		return err
 	}
@@ -153,6 +165,15 @@ func doctorClaudeDir(ctx context.Context, w io.Writer, s settings, cfg config.Co
 		row("watching", "unavailable: polling only")
 	}
 	row("cache", "%s", orDash(tildePath(stats.Cache)))
+	tiers := tierUsage(sessions, prices)
+	if len(tiers) == 0 {
+		row("price tiers", "none used (no fast-mode or long-prompt usage)")
+	}
+	label := "price tiers"
+	for _, t := range tiers {
+		row(label, "%s", t)
+		label = ""
+	}
 	if logs.Len() == 0 {
 		row("warnings", "none")
 	} else {
@@ -173,7 +194,92 @@ func doctorClaudeDir(ctx context.Context, w io.Writer, s settings, cfg config.Co
 		_, _ = fmt.Fprintf(w, "  %s  pid %-7d %-8s %-18s context %-5s %s\n",
 			shortID(sess.ID), sess.Live.PID, orDash(string(sess.Live.Status)), orDash(sess.Model), contextFill(sess), cleanPath(sess.ProjectDir))
 	}
+	doctorMeter(w, sessions, limits, limitsAt)
 	return nil
+}
+
+// statuslineSnippet is the setting that enables the status-line meter.
+const statuslineSnippet = `{ "statusLine": { "type": "command", "command": "ccdeck statusline", "refreshInterval": 30 } }`
+
+// doctorMeter reports on the status-line meter: where its reports go, and
+// whether it is feeding, which is when a live session has a report written
+// since its process started. When it is not, it shows how to enable it.
+func doctorMeter(w io.Writer, sessions []core.Session, limits []core.RateLimit, limitsAt time.Time) {
+	row := func(k, format string, args ...any) {
+		_, _ = fmt.Fprintf(w, "  %-14s %s\n", k, fmt.Sprintf(format, args...))
+	}
+	now := time.Now()
+	_, _ = fmt.Fprintln(w, "\nStatus-line meter")
+	dir := meterDir()
+	if dir == "" {
+		row("state", "unavailable: no home directory")
+		return
+	}
+	reports, err := meter.ReadDir(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		row("state", "%s (not created: the helper has never run)", tildePath(dir))
+	case err != nil:
+		row("state", "%s: unreadable: %v", tildePath(dir), err)
+	default:
+		var newest time.Time
+		for _, r := range reports {
+			if r.Meter.At.After(newest) {
+				newest = r.Meter.At
+			}
+		}
+		if len(reports) == 0 {
+			row("state", "%s (no reports)", tildePath(dir))
+		} else {
+			row("state", "%s (%d %s, newest %s)", tildePath(dir), len(reports), plural(len(reports), "report", "reports"), ago(newest, now))
+		}
+	}
+
+	live, fed := 0, 0
+	for _, s := range sessions {
+		if s.Live == nil {
+			continue
+		}
+		live++
+		if s.Meter != nil && !s.Meter.At.Before(s.Live.StartedAt) {
+			fed++
+		}
+	}
+	switch {
+	case fed > 0:
+		row("feeding", "yes: %d of %d live %s reported since it started", fed, live, plural(live, "session", "sessions"))
+	case live == 0:
+		row("feeding", "unknown: no live session to check")
+	default:
+		row("feeding", "no: none of the %d live %s has reported", live, plural(live, "session", "sessions"))
+	}
+	if len(limits) == 0 {
+		row("rate limits", "none reported")
+	} else {
+		parts := make([]string, 0, len(limits))
+		for _, l := range limits {
+			p := fmt.Sprintf("%s %.0f%%", l.Window, math.Floor(l.UsedPercent))
+			if !l.ResetsAt.IsZero() {
+				p += " (resets in " + until(now, l.ResetsAt) + ")"
+			}
+			parts = append(parts, p)
+		}
+		row("rate limits", "%s, reported %s", strings.Join(parts, ", "), ago(limitsAt, now))
+	}
+	// The setting is shown when the meter is not feeding a live session,
+	// or has never run; with no live session and reports on file it may
+	// well be enabled.
+	if fed == 0 && (live > 0 || len(reports) == 0) {
+		_, _ = fmt.Fprintf(w, "\n  To feed it, add this to Claude Code's settings.json (ccdeck never edits it),\n"+
+			"  or wrap an existing status line with --wrap '<command>' (see ccdeck statusline --help):\n\n    %s\n", statuslineSnippet)
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // doctorEnvironment reports on what resuming needs and on the terminal.
@@ -225,4 +331,42 @@ func yesNo(b bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// priceCounts describes Claude Code's price cache: the models, and how many
+// have fast or long-prompt rates.
+func priceCounts(prices claude.Prices, thresholds claude.Thresholds) string {
+	models, fast := 0, 0
+	for key := range prices {
+		switch _, tiers := claude.SplitUsageKey(key); {
+		case len(tiers) == 0:
+			models++
+		case slices.Equal(tiers, []string{"fast"}):
+			fast++
+		}
+	}
+	return fmt.Sprintf("%d %s priced (%d with fast rates, %d with long-prompt rates)",
+		models, plural(models, "model", "models"), fast, len(thresholds))
+}
+
+// tierUsage lists each usage key of a fast or long-prompt tier with the
+// number of sessions that used it, and says when it has no price.
+func tierUsage(sessions []core.Session, prices claude.Prices) []string {
+	count := map[string]int{}
+	for _, s := range sessions {
+		for key, u := range s.Usage {
+			if _, tiers := claude.SplitUsageKey(key); len(tiers) > 0 && u != (core.Usage{}) {
+				count[key]++
+			}
+		}
+	}
+	var out []string
+	for _, key := range slices.Sorted(maps.Keys(count)) {
+		l := fmt.Sprintf("%s in %d %s", claude.DescribeUsageKey(key), count[key], plural(count[key], "session", "sessions"))
+		if _, ok := prices.Lookup(key); !ok {
+			l += ", no price: those sessions show tokens only"
+		}
+		out = append(out, l)
+	}
+	return out
 }

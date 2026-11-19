@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -251,6 +252,10 @@ func validateKeys(keys map[string][]string) error {
 	return nil
 }
 
+// MaxThemeChain is the most custom themes one chain of bases may hold, the
+// theme itself included. It must equal the limit the UI applies.
+const MaxThemeChain = 5
+
 func validateThemes(themes map[string]Theme) error {
 	for _, name := range sortedKeys(themes) {
 		t := themes[name]
@@ -276,15 +281,26 @@ func validateThemes(themes map[string]Theme) error {
 			if seen[b] {
 				return fmt.Errorf("key %s: theme %q is its own ancestor", joinKey("themes", name, "base"), b)
 			}
+			if len(seen) >= MaxThemeChain {
+				return fmt.Errorf("key %s: the chain of bases is deeper than %d custom themes",
+					joinKey("themes", name, "base"), MaxThemeChain)
+			}
 			seen[b] = true
 		}
 	}
 	return nil
 }
 
+// priceTiers are the suffixes a [prices] key may carry to price a tier of a
+// model: fast mode, long prompts, or both.
+var priceTiers = []string{"", "+fast", "+long", "+fast+long"}
+
 func validatePrices(prices map[string]Price) error {
 	for _, model := range sortedKeys(prices) {
 		p := prices[model]
+		if id, _, _ := strings.Cut(model, "+"); id == "" || !slices.Contains(priceTiers, strings.TrimPrefix(model, id)) {
+			return fmt.Errorf("key %s: a model id may end in +fast, +long or +fast+long, nothing else", joinKey("prices", model))
+		}
 		for _, f := range []struct {
 			name string
 			v    float64

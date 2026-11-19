@@ -304,3 +304,53 @@ func TestCountsCoverConversation(t *testing.T) {
 		}
 	}
 }
+
+// The demo shows the status-line meter: sessions whose figures are Claude
+// Code's own, and rate limits with one window at or above 80%.
+func TestMeterAndLimits(t *testing.T) {
+	st, c := newTest(t, 1)
+	claude := 0
+	for _, s := range st.Sessions() {
+		if s.CostKind != core.CostClaude {
+			continue
+		}
+		claude++
+		if s.Meter == nil || s.Meter.CostUSD != s.CostUSD || s.Meter.ContextTokens != s.ContextTokens || s.Live == nil {
+			t.Errorf("%s: meter %+v does not match the session", s.ID, s.Meter)
+		}
+	}
+	if claude == 0 {
+		t.Error("no session with Claude Code's own figures")
+	}
+	limits, at := st.Limits()
+	if len(limits) < 2 || at.IsZero() || at.After(c.t) {
+		t.Fatalf("Limits = %+v, %v", limits, at)
+	}
+	high := false
+	for _, l := range limits {
+		high = high || l.UsedPercent >= 80
+		if !l.ResetsAt.After(c.t) {
+			t.Errorf("window %s has reset already", l.Window)
+		}
+	}
+	if !high {
+		t.Error("no window at or above 80%")
+	}
+
+	// The meter follows the session as it moves, without touching an
+	// earlier snapshot.
+	before := st.Sessions()
+	steps(st, c, 30)
+	for _, s := range before {
+		if s.Meter != nil && !s.Meter.At.Before(c.t.Add(-29*time.Second)) {
+			t.Errorf("%s: an old snapshot's meter moved", s.ID)
+		}
+	}
+	// After the five-hour window resets it starts again.
+	c.t = c.t.Add(2 * time.Hour)
+	st.Step()
+	limits, _ = st.Limits()
+	if len(limits) != 2 || limits[0].Window != "5h" || limits[0].UsedPercent >= 80 || !limits[0].ResetsAt.After(c.t) {
+		t.Errorf("after a reset Limits = %+v", limits)
+	}
+}

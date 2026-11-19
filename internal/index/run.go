@@ -57,6 +57,7 @@ func (s *Store) run() {
 // modified first.
 func (s *Store) scan() {
 	s.regs = s.readRegistry()
+	s.refreshMeters()
 	cache := s.loadCache()
 	s.prevCache = cache // kept by a save before the scan completes
 	files, err := s.paths.Transcripts()
@@ -142,7 +143,7 @@ func (s *Store) loadAll(files []claude.TranscriptFile, cache map[string]cachedFi
 			for f := range jobs {
 				// After Close, load stops between lines and returns what it
 				// read, which is still delivered so that it can be cached.
-				results <- load(s.ctx, f.SessionID, f.Path, cache, s.log)
+				results <- load(s.ctx, f.SessionID, f.Path, cache, s.thresholds, s.log)
 			}
 		})
 	}
@@ -157,6 +158,7 @@ func (s *Store) loadAll(files []claude.TranscriptFile, cache map[string]cachedFi
 type pending struct {
 	sessions map[string]string // session id → main transcript path
 	registry bool              // the registry directory changed
+	meter    bool              // the meter directory changed
 	sweep    bool              // something was missed: rescan everything
 }
 
@@ -184,6 +186,9 @@ func (s *Store) process() {
 	if p.registry {
 		s.refreshLive()
 	}
+	if p.meter {
+		s.refreshMeters()
+	}
 	for id, path := range p.sessions {
 		s.refresh(id, path)
 	}
@@ -193,6 +198,7 @@ func (s *Store) process() {
 // dead processes and extends the transcripts of live sessions.
 func (s *Store) pollLive() {
 	s.refreshLive()
+	s.refreshMeters()
 	for id := range s.regs {
 		if t, ok := s.tracked[id]; ok {
 			s.refresh(id, t.path)
@@ -203,11 +209,22 @@ func (s *Store) pollLive() {
 // sweep rescans everything: prices, catalog, registry, and every
 // transcript. It finds sessions whose events were missed, drops vanished
 // ones, and rebuilds every summary, so recent samples age out. Then it
-// saves the cache if anything changed.
+// saves the cache if anything changed. When the long-prompt thresholds
+// changed, every transcript is read again from the start, because usage is
+// filed by tier as it is read.
 func (s *Store) sweep() {
-	s.loadPrices()
+	if s.loadPrices() {
+		for _, t := range s.tracked {
+			for _, f := range t.files() {
+				f.refile(s.thresholds)
+			}
+		}
+		s.dirty = true
+	}
 	s.loadCatalog()
 	s.refreshLive()
+	s.refreshMeters()
+	s.cleanMeters(time.Now())
 	files, err := s.paths.Transcripts()
 	if err != nil {
 		s.log.Warn("index: list transcripts", "err", err)
@@ -237,7 +254,7 @@ func (s *Store) refresh(id, path string) {
 		if path == "" {
 			return
 		}
-		t = load(s.ctx, id, path, nil, s.log)
+		t = load(s.ctx, id, path, nil, s.thresholds, s.log)
 		if t.main == nil && !s.live(id) {
 			return
 		}
@@ -252,7 +269,7 @@ func (s *Store) refresh(id, path string) {
 
 	grew := false
 	if t.main == nil && t.path != "" {
-		if f, err := openFile(s.ctx, t.path, nil); err == nil {
+		if f, err := openFile(s.ctx, t.path, nil, s.thresholds); err == nil {
 			t.main, grew = f, true
 		}
 	} else if t.main != nil {
@@ -266,7 +283,7 @@ func (s *Store) refresh(id, path string) {
 		}
 		grew = c
 	}
-	subsChanged := t.main != nil && syncSubagents(s.ctx, t, nil, s.log)
+	subsChanged := t.main != nil && syncSubagents(s.ctx, t, nil, s.thresholds, s.log)
 	if grew || subsChanged {
 		s.dirty = true
 	}
@@ -368,6 +385,9 @@ func (s *Store) publish(t *tracked, entries bool) {
 	if changed {
 		s.subs.notify(core.Event{Kind: core.SessionsChanged, SessionID: t.id})
 	}
+	if _, has := s.meters[t.id]; !ok && has {
+		s.publishLimits() // a report of this store's sessions now
+	}
 	if entries {
 		s.subs.notify(core.Event{Kind: core.EntriesChanged, SessionID: t.id})
 	}
@@ -382,21 +402,35 @@ func (s *Store) unpublish(id string) {
 	if ok {
 		s.subs.notify(core.Event{Kind: core.SessionsChanged, SessionID: id})
 	}
+	if _, has := s.meters[id]; ok && has {
+		s.publishLimits() // no longer a report of this store's sessions
+	}
 }
 
 // loadPrices rereads Claude Code's price cache when its file changed and
-// lays the configured overrides over it.
-func (s *Store) loadPrices() {
+// lays the configured overrides over it. It reports whether the long-prompt
+// thresholds changed; a file that cannot be read keeps the old ones.
+func (s *Store) loadPrices() (thresholdsChanged bool) {
 	var st fileStamp
 	if fi, err := os.Stat(s.paths.ConfigFile); err == nil {
 		st = stampOf(fi)
 	}
 	if s.prices != nil && st == s.priceStamp {
-		return
+		return false
 	}
-	p, err := claude.ReadPrices(s.paths.ConfigFile)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	p, th, err := claude.ReadPrices(s.paths.ConfigFile)
+	switch {
+	case err == nil, errors.Is(err, fs.ErrNotExist):
+		if th == nil {
+			th = claude.Thresholds{}
+		}
+		thresholdsChanged = s.thresholds != nil && !maps.Equal(th, s.thresholds)
+		s.thresholds = th
+	default:
 		s.log.Warn("index: read prices", "err", err)
+		if s.thresholds == nil {
+			s.thresholds = claude.Thresholds{}
+		}
 	}
 	merged := claude.Prices{}
 	maps.Copy(merged, p)
@@ -405,6 +439,7 @@ func (s *Store) loadPrices() {
 	s.prices = merged
 	s.mu.Unlock()
 	s.priceStamp = st
+	return thresholdsChanged
 }
 
 func (s *Store) loadCatalog() {

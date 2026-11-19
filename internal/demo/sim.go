@@ -56,6 +56,11 @@ func (st *Store) build(sp spec, now time.Time) *session {
 		s.CostUSD = sp.reported
 	case core.CostEstimated:
 		s.CostUSD = costOf(s.Usage)
+	case core.CostClaude:
+		// As if the status-line helper were enabled: Claude Code's own
+		// figures, reported just after the latest message.
+		s.CostUSD = costOf(s.Usage)
+		s.Meter = meterOf(s, last)
 	}
 	if sp.status != core.StatusEnded {
 		s.Live = &core.Live{
@@ -258,12 +263,34 @@ func (st *Store) work(x *session, now time.Time) {
 	x.s.Recent = x.s.Recent[cut:]
 
 	before := x.s.CostUSD
-	if x.s.CostKind == core.CostEstimated {
+	if x.s.CostKind == core.CostEstimated || x.s.CostKind == core.CostClaude {
 		x.s.CostUSD = costOf(x.s.Usage)
+	}
+	if x.s.Meter != nil {
+		x.s.Meter = meterOf(x.s, now) // a new value: snapshots share the old one
 	}
 	d := st.day(now)
 	d.Usage[x.s.Model] = d.Usage[x.s.Model].Add(delta)
 	d.CostUSD += x.s.CostUSD - before
+}
+
+// meterOf is the status-line report Claude Code would have written about s
+// at at.
+func meterOf(s core.Session, at time.Time) *core.Meter {
+	pct, ok := s.ContextPercent()
+	return &core.Meter{
+		At: at, HasContext: ok, ContextPercent: pct, ContextWindow: s.ContextWindow, ContextTokens: s.ContextTokens,
+		CostUSD: s.CostUSD, LinesAdded: s.ToolCalls * 7, LinesRemoved: s.ToolCalls * 2,
+	}
+}
+
+// demoLimits are the account's invented rate-limit windows as of now: the
+// five-hour window is nearly used up, so the warning shows.
+func demoLimits(now time.Time) []core.RateLimit {
+	return []core.RateLimit{
+		{Window: "5h", UsedPercent: 84, ResetsAt: now.Add(72 * time.Minute).Truncate(time.Minute)},
+		{Window: "7d", UsedPercent: 41, ResetsAt: now.Add(76 * time.Hour).Truncate(time.Hour)},
+	}
 }
 
 // counts returns how many prompts, assistant replies and tool calls a

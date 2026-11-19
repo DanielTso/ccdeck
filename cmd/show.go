@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/DanielTso/ccdeck/internal/claude"
 	"github.com/DanielTso/ccdeck/internal/core"
 )
 
@@ -107,10 +108,13 @@ func writeShow(w io.Writer, s core.Session, entries []core.Entry, now time.Time)
 	}
 	row("context", ctx)
 	row("cost", costLong(s.CostUSD, s.CostKind))
+	if m := s.Meter; m != nil {
+		row("meter", meterSummary(*m, now))
+	}
 	for _, model := range slices.Sorted(maps.Keys(s.Usage)) {
 		u := s.Usage[model]
 		row("tokens", fmt.Sprintf("%s: %s total, %s fresh (in %s, out %s, cache read %s, write %s)",
-			orDash(model), tokens(u.Total()), tokens(u.Fresh()), tokens(u.Input), tokens(u.Output),
+			orDash(claude.DescribeUsageKey(model)), tokens(u.Total()), tokens(u.Fresh()), tokens(u.Input), tokens(u.Output),
 			tokens(u.CacheRead), tokens(u.CacheWrite5m+u.CacheWrite1h)))
 	}
 	for _, a := range s.Subagents {

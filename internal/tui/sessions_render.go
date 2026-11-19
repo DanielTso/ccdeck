@@ -324,6 +324,8 @@ func (v *sessionsView) previewFull(s core.Session, w int) []string {
 		field("cost", st.text.Render(fmtCost(s.CostKind, s.CostUSD))+st.muted.Render("  estimate"))
 	case core.CostReported:
 		field("cost", st.text.Render(fmtCost(s.CostKind, s.CostUSD))+st.muted.Render("  reported"))
+	case core.CostClaude:
+		field("cost", st.text.Render(fmtCost(s.CostKind, s.CostUSD))+st.muted.Render("  Claude Code's estimate"))
 	default:
 		field("cost", st.muted.Render("— no price known"))
 	}
@@ -368,6 +370,9 @@ func (v *sessionsView) contextLine(s core.Session, w int) string {
 		return st.text.Render(fmtTokens(s.ContextTokens)) + st.muted.Render(" tokens · window unknown")
 	}
 	detail := "  " + fmtTokens(s.ContextTokens) + " / " + fmtTokens(s.ContextWindow)
+	if meterContext(s) {
+		detail += " · Claude Code"
+	}
 	g := min(max(w-width(detail), 9), 30)
 	return st.gauge(s, g) + st.muted.Render(detail)
 }

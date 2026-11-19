@@ -25,6 +25,7 @@ func isolate(t *testing.T) string {
 	t.Helper()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("PATH", t.TempDir()) // doctor must not find tmux or claude
 	dir := t.TempDir()
@@ -202,6 +203,33 @@ func TestDashboardRejectsUnknownTheme(t *testing.T) {
 	}
 }
 
+// A custom theme may be based on another custom theme, as the config example
+// says: the UI starts on one, and it rejects a base that does not exist with
+// the config key named.
+func TestCustomThemeBases(t *testing.T) {
+	if config.MaxThemeChain != tui.MaxThemeChain {
+		t.Fatalf("config allows chains of %d custom themes, the UI %d", config.MaxThemeChain, tui.MaxThemeChain)
+	}
+	isolate(t)
+	good := filepath.Join(t.TempDir(), "good.toml")
+	writeFile(t, good, "theme = \"child\"\n[themes.child]\nbase = \"parent\"\n[themes.parent]\nbase = \"paper\"\naccent = \"#ff8800\"\n")
+	s := settings{configPath: good}
+	cfg, err := loadConfig(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tui.New(tuiOptions(cfg.Config, "", demo.New(demo.Options{}), newLauncher(cfg.Config, s))); err != nil {
+		t.Fatalf("the UI rejects a custom theme on a custom base: %v", err)
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad.toml")
+	writeFile(t, bad, "[themes.child]\nbase = \"parent\"\n[themes.parent]\nbase = \"neon\"\n")
+	_, err = run(t, "--demo", "--config", bad)
+	if err == nil || !strings.Contains(err.Error(), "key themes.parent.base") || !strings.Contains(err.Error(), `"neon"`) {
+		t.Errorf("err = %v, want the config key and the base named", err)
+	}
+}
+
 func TestTUIOptions(t *testing.T) {
 	cfg := config.Default()
 	cfg.Theme = "mine"
@@ -367,5 +395,95 @@ func TestUIErrorsNameTheConfigKey(t *testing.T) {
 	_, err := run(t, "--demo", "--theme", "nosuch")
 	if err == nil || !strings.HasPrefix(err.Error(), "--theme: ") {
 		t.Errorf("--theme: err = %v", err)
+	}
+}
+
+// isolateTiers is isolate plus a fast message and a price cache with fast
+// rates for claude-test-1 and long-prompt rates for another model.
+func isolateTiers(t *testing.T) string {
+	t.Helper()
+	dir := isolate(t)
+	fast := `{"type":"assistant","uuid":"a2","timestamp":"2026-01-10T10:01:00.000Z","cwd":"/work/widgets","message":{"id":"m2","model":"claude-test-1","content":[{"type":"text","text":"Quick."}],"usage":{"input_tokens":1000,"output_tokens":10,"speed":"fast"}}}`
+	f, err := os.OpenFile(filepath.Join(dir, "projects", "-work-widgets", fixtureID+".jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(fast + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	writeFile(t, filepath.Join(dir, ".claude.json"), `{"additionalModelCostsCache":{`+
+		`"claude-test-1":{"inputTokens":1,"outputTokens":1,"promptCacheWriteTokens":1,"promptCacheReadTokens":1,"fast":{"inputTokens":2,"outputTokens":2,"promptCacheWriteTokens":2,"promptCacheReadTokens":2}},`+
+		`"claude-test-2":{"inputTokens":1,"outputTokens":1,"longPrompt":{"abovePromptTokens":100000,"inputTokens":2,"outputTokens":2}}}}`)
+	return dir
+}
+
+func TestTierDisplay(t *testing.T) {
+	dir := isolateTiers(t)
+	out, err := run(t, "show", fixtureID[:6], "--claude-dir", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"claude-test-1: ", "claude-test-1 (fast): ", "estimate"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "+fast") {
+		t.Errorf("show prints a raw usage key:\n%s", out)
+	}
+	out, err = run(t, "show", fixtureID, "--json", "--claude-dir", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Session core.Session `json:"session"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	// 100×1 + 20×1 standard, 1000×2 + 10×2 fast, per million tokens.
+	if s := got.Session; s.CostKind != core.CostEstimated || s.CostUSD < 0.00213999 || s.CostUSD > 0.00214001 || s.Model != "claude-test-1" {
+		t.Errorf("cost %v %v model %q, want 0.00214 estimated on claude-test-1", s.CostUSD, s.CostKind, s.Model)
+	}
+
+	out, err = run(t, "list", "--claude-dir", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "claude-test-1 ") || strings.Contains(out, "fast") {
+		t.Errorf("list must show the plain model id:\n%s", out)
+	}
+
+	out, err = run(t, "doctor", "--claude-dir", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"2 models priced (", "1 with fast rates", "1 with long-prompt rates",
+		"price tiers", "claude-test-1 (fast) in 1 session",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorUnpricedTier(t *testing.T) {
+	dir := isolateTiers(t)
+	writeFile(t, filepath.Join(dir, ".claude.json"), `{"additionalModelCostsCache":{"claude-test-1":{"inputTokens":1,"outputTokens":1}}}`)
+	out, err := run(t, "doctor", "--claude-dir", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "claude-test-1 (fast) in 1 session, no price") {
+		t.Errorf("doctor does not flag the unpriced tier:\n%s", out)
+	}
+	out, err = run(t, "doctor", "--claude-dir", isolate(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "price tiers") || !strings.Contains(out, "none used") {
+		t.Errorf("doctor without tiered usage:\n%s", out)
 	}
 }

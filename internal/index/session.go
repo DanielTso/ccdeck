@@ -61,6 +61,14 @@ func (f *file) Reset() {
 	f.days.buckets = dayBuckets{}
 }
 
+// refile makes the next update read the file again from the start, filing
+// usage under the thresholds th.
+func (f *file) refile(th claude.Thresholds) {
+	f.acc.SetThresholds(th)
+	f.tail.Restart(f)
+	f.stamp = fileStamp{}
+}
+
 // track sets the accumulator and the day buckets that follow its usage.
 func (f *file) track(acc *claude.Accumulator, days dayBuckets) {
 	f.acc = acc
@@ -69,8 +77,10 @@ func (f *file) track(acc *claude.Accumulator, days dayBuckets) {
 }
 
 // openFile reads the transcript at path, continuing from c when c is a
-// cached state that still matches the file.
-func openFile(ctx context.Context, path string, c *cachedFile) (*file, error) {
+// cached state that still matches the file. th files usage of long prompts
+// (see claude.Accumulator.SetThresholds); c must have been folded with the
+// same thresholds, which loadCache checks.
+func openFile(ctx context.Context, path string, c *cachedFile, th claude.Thresholds) (*file, error) {
 	f := &file{path: path}
 	if c != nil {
 		f.resume(c)
@@ -79,6 +89,7 @@ func openFile(ctx context.Context, path string, c *cachedFile) (*file, error) {
 		f.track(claude.NewAccumulator(), nil)
 		f.tail = claude.NewTailer(path, 0)
 	}
+	f.acc.SetThresholds(th)
 	_, err := f.update(ctx)
 	return f, err
 }
@@ -146,9 +157,9 @@ func (f *file) update(ctx context.Context) (changed bool, err error) {
 // can. It touches no Store state, so start-up workers run it in parallel.
 // main is nil in the result when the transcript is gone. When ctx ends the
 // result holds what was read so far, which is consistent and can be cached.
-func load(ctx context.Context, id, path string, cache map[string]cachedFile, log *slog.Logger) *tracked {
+func load(ctx context.Context, id, path string, cache map[string]cachedFile, th claude.Thresholds, log *slog.Logger) *tracked {
 	t := &tracked{id: id, path: path, subs: map[string]*subagent{}}
-	f, err := openFile(ctx, path, cached(cache, path))
+	f, err := openFile(ctx, path, cached(cache, path), th)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return t
@@ -159,7 +170,7 @@ func load(ctx context.Context, id, path string, cache map[string]cachedFile, log
 		log.Warn("index: read transcript", "path", path, "err", err)
 	}
 	t.main = f
-	syncSubagents(ctx, t, cache, log)
+	syncSubagents(ctx, t, cache, th, log)
 	return t
 }
 
@@ -173,7 +184,7 @@ func cached(cache map[string]cachedFile, path string) *cachedFile {
 // syncSubagents brings t's subagent transcripts up to date: new ones are
 // read (from cache when possible), known ones extended, vanished ones
 // dropped. It reports whether anything changed.
-func syncSubagents(ctx context.Context, t *tracked, cache map[string]cachedFile, log *slog.Logger) bool {
+func syncSubagents(ctx context.Context, t *tracked, cache map[string]cachedFile, th claude.Thresholds, log *slog.Logger) bool {
 	if t.path == "" {
 		return false
 	}
@@ -188,7 +199,7 @@ func syncSubagents(ctx context.Context, t *tracked, cache map[string]cachedFile,
 		seen[sf.Path] = true
 		sa, ok := t.subs[sf.Path]
 		if !ok {
-			f, err := openFile(ctx, sf.Path, cached(cache, sf.Path))
+			f, err := openFile(ctx, sf.Path, cached(cache, sf.Path), th)
 			if ctx.Err() != nil {
 				return changed // stopping: what was read of f is not kept
 			}
@@ -261,5 +272,9 @@ func (s *Store) summarize(t *tracked, now time.Time) core.Session {
 		sa := t.subs[p]
 		in.Subagents = append(in.Subagents, claude.SubagentInput{ID: sa.id, Meta: sa.meta, Acc: sa.f.acc})
 	}
-	return acc.Session(in)
+	sum := acc.Session(in)
+	if m, ok := s.meters[t.id]; ok {
+		applyMeter(&sum, m.rep.Meter, acc.ContextAt())
+	}
+	return sum
 }

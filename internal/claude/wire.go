@@ -72,6 +72,11 @@ type wireUsage struct {
 	ServerToolUse *struct {
 		WebSearchRequests int64 `json:"web_search_requests"`
 	} `json:"server_tool_use"`
+	// Speed is the tier the request was served in: "standard" or "fast".
+	Speed string `json:"speed"`
+	// Iterations lists the requests of a message that took several; decoded
+	// only for models with a long-prompt tier.
+	Iterations json.RawMessage `json:"iterations"`
 }
 
 // usage converts the wire form. Without the cache_creation breakdown every

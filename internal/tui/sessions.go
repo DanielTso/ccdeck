@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/sahilm/fuzzy"
 
@@ -60,10 +59,10 @@ type sessionsView struct {
 	scope scopeMode
 	group bool
 
-	filter    textinput.Model
+	filter    textInput
 	filtering bool // the filter input has focus
 
-	search    textinput.Model
+	search    textInput
 	searching bool
 	hits      []core.PromptHit
 	hit       int
@@ -101,8 +100,8 @@ func newSessionsView(e *env) *sessionsView {
 		cursor:  -1,
 		entries: map[string][]core.Entry{},
 		loadErr: map[string]error{},
-		filter:  textinput.New(),
-		search:  textinput.New(),
+		filter:  newTextInput(),
+		search:  newTextInput(),
 	}
 	v.filter.Prompt = "/ "
 	v.filter.Placeholder = "filter sessions"
@@ -179,6 +178,13 @@ func (v *sessionsView) Update(msg tea.Msg) tea.Cmd {
 			return v.filterKey(msg)
 		}
 		return v.key(msg)
+	case tea.PasteMsg:
+		switch {
+		case v.searching:
+			return v.searchEdit(msg)
+		case v.filtering:
+			return v.filterEdit(msg)
+		}
 	case tea.MouseClickMsg:
 		return v.click(msg.X, msg.Y)
 	case tea.MouseWheelMsg:
@@ -282,6 +288,11 @@ func (v *sessionsView) filterKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "down":
 		return v.move(1)
 	}
+	return v.filterEdit(msg)
+}
+
+// filterEdit passes a key or a paste to the filter and applies the result.
+func (v *sessionsView) filterEdit(msg tea.Msg) tea.Cmd {
 	before := v.filter.Value()
 	var cmd tea.Cmd
 	v.filter, cmd = v.filter.Update(msg)
@@ -316,6 +327,11 @@ func (v *sessionsView) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	return v.searchEdit(msg)
+}
+
+// searchEdit passes a key or a paste to the prompt search and runs it.
+func (v *sessionsView) searchEdit(msg tea.Msg) tea.Cmd {
 	before := v.search.Value()
 	var cmd tea.Cmd
 	v.search, cmd = v.search.Update(msg)

@@ -216,7 +216,7 @@ func TestLookupPrefersLongestPrefix(t *testing.T) {
 }
 
 func TestPrices(t *testing.T) {
-	prices, err := ReadPrices(fixturePaths(t).ConfigFile)
+	prices, _, err := ReadPrices(fixturePaths(t).ConfigFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestPrices(t *testing.T) {
 	if got := want.Cost(u); got < 43.0799 || got > 43.0801 {
 		t.Errorf("Cost = %v, want 43.08", got)
 	}
-	if _, err := ReadPrices(filepath.Join(t.TempDir(), "none.json")); !errors.Is(err, fs.ErrNotExist) {
+	if _, _, err := ReadPrices(filepath.Join(t.TempDir(), "none.json")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("missing config: err = %v", err)
 	}
 }

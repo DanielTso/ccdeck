@@ -120,6 +120,10 @@ func builtin(name string) (theme, bool) {
 	return theme{}, false
 }
 
+// MaxThemeChain is the most custom themes one chain of bases may hold, the
+// theme itself included. The config validator enforces the same limit.
+const MaxThemeChain = 5
+
 // resolveThemes returns every available theme, built-ins first and then the
 // custom ones sorted by name.
 func resolveThemes(custom map[string]ThemeSpec) ([]theme, error) {
@@ -128,7 +132,7 @@ func resolveThemes(custom map[string]ThemeSpec) ([]theme, error) {
 		if _, clash := builtin(name); clash {
 			return nil, optionErr("themes."+name, "custom theme %q has the name of a built-in theme", name)
 		}
-		t, err := customTheme(name, custom[name])
+		t, err := resolveCustom(name, custom)
 		if err != nil {
 			return nil, err
 		}
@@ -137,16 +141,53 @@ func resolveThemes(custom map[string]ThemeSpec) ([]theme, error) {
 	return all, nil
 }
 
-func customTheme(name string, spec ThemeSpec) (theme, error) {
-	base := spec.Base
-	if base == "" {
-		base = defaultDarkTheme
+// resolveCustom builds one custom theme by following its chain of bases down
+// to a built-in and applying each theme's colours on the way back up. A base
+// is a custom theme when one has that name, else a built-in. A cycle, an
+// unknown base and a chain longer than MaxThemeChain are errors that name the
+// key at fault.
+func resolveCustom(name string, custom map[string]ThemeSpec) (theme, error) {
+	chain := []string{name}
+	var t theme
+	for cur := name; ; {
+		base := custom[cur].Base
+		if base == "" {
+			base = defaultDarkTheme
+		}
+		if _, isCustom := custom[base]; isCustom {
+			if i := slices.Index(chain, base); i >= 0 {
+				return theme{}, optionErr("themes."+cur+".base", "theme %q: base %q is part of a cycle (%s)",
+					cur, base, strings.Join(append(slices.Clone(chain[i:]), base), " -> "))
+			}
+			if len(chain) >= MaxThemeChain {
+				return theme{}, optionErr("themes."+name+".base",
+					"theme %q: its chain of bases is deeper than %d custom themes (%s -> %s ...)",
+					name, MaxThemeChain, strings.Join(chain, " -> "), base)
+			}
+			chain = append(chain, base)
+			cur = base
+			continue
+		}
+		b, ok := builtin(base)
+		if !ok {
+			return theme{}, optionErr("themes."+cur+".base",
+				"theme %q: base %q is neither a custom theme nor a built-in theme (built-ins: %s)",
+				cur, base, strings.Join(BuiltinThemes(), ", "))
+		}
+		t = b
+		break
 	}
-	t, ok := builtin(base)
-	if !ok {
-		return theme{}, optionErr("themes."+name+".base", "theme %q: base %q is not a built-in theme (have %s)",
-			name, base, strings.Join(BuiltinThemes(), ", "))
+	for _, n := range slices.Backward(chain) {
+		var err error
+		if t, err = customTheme(n, custom[n], t); err != nil {
+			return theme{}, err
+		}
 	}
+	return t, nil
+}
+
+// customTheme returns base renamed to name with the spec's colours applied.
+func customTheme(name string, spec ThemeSpec, t theme) (theme, error) {
 	t.name = name
 	tokens := t.tokens()
 	for _, tok := range slices.Sorted(maps.Keys(spec.Colors)) {

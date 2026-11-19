@@ -115,6 +115,13 @@ cache_read = 0.15
 	}
 }
 
+func TestParseAcceptsLongestThemeChain(t *testing.T) {
+	src := "[themes.a]\nbase = \"b\"\n[themes.b]\nbase = \"c\"\n[themes.c]\nbase = \"d\"\n[themes.d]\nbase = \"e\"\n[themes.e]\nbase = \"ember\"\n"
+	if _, err := parse([]byte(src), "test.toml"); err != nil {
+		t.Fatalf("a chain of %d custom themes: %v", MaxThemeChain, err)
+	}
+}
+
 func TestParsePartialKeepsDefaults(t *testing.T) {
 	got, err := parse([]byte("[layout]\nlive_panes = 2\n"), "test.toml")
 	if err != nil {
@@ -157,6 +164,8 @@ func TestParseErrors(t *testing.T) {
 		{"blank base", "[themes.t]\nbase = \" \"\n", []string{"themes.t.base"}},
 		{"theme cycle", "[themes.a]\nbase = \"b\"\n[themes.b]\nbase = \"a\"\n", []string{"themes.a.base", "ancestor"}},
 		{"theme is its own base", "[themes.a]\nbase = \"a\"\n", []string{"themes.a.base", "ancestor"}},
+		{"theme chain too deep", "[themes.a]\nbase = \"b\"\n[themes.b]\nbase = \"c\"\n[themes.c]\nbase = \"d\"\n[themes.d]\nbase = \"e\"\n[themes.e]\nbase = \"f\"\n[themes.f]\nbase = \"ember\"\n",
+			[]string{"themes.a.base", "deeper than 5"}},
 		{"negative price", "[prices.\"m.1\"]\noutput = -0.01\n", []string{`prices."m.1".output`}},
 		{"nan price", "[prices.m]\ninput = nan\n", []string{"prices.m.input"}},
 		{"infinite price", "[prices.m]\ncache_read = inf\n", []string{"prices.m.cache_read"}},
@@ -275,5 +284,22 @@ func write(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPriceTierKeys(t *testing.T) {
+	src := "[prices.\"claude-x-1+fast\"]\ninput = 2\n[prices.\"claude-x-1+long\"]\ninput = 3\n[prices.\"claude-x-1+fast+long\"]\ninput = 4\n"
+	got, err := parse([]byte(src), "test.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Prices) != 3 || got.Prices["claude-x-1+fast+long"].Input != 4 {
+		t.Errorf("prices = %+v", got.Prices)
+	}
+	for _, bad := range []string{"claude-x-1+fsat", "claude-x-1+long+fast", "claude-x-1+", "+fast", "claude-x-1+fast+fast", "claude-x-1+unknown"} {
+		_, err := parse([]byte("[prices.\""+bad+"\"]\ninput = 1\n"), "test.toml")
+		if err == nil || !strings.Contains(err.Error(), `prices."`+bad+`"`) || !strings.Contains(err.Error(), "+fast") {
+			t.Errorf("%q: err = %v, want the key named and the valid tiers listed", bad, err)
+		}
 	}
 }

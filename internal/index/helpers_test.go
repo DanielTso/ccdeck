@@ -47,7 +47,11 @@ type env struct {
 	t     *testing.T
 	dir   string
 	cache string
+	meter string // the meter's state directory; empty means the meter is off
 	procs *fakeProcs
+	// readyWait bounds how long open waits for the start-up scan; zero
+	// means 5 seconds.
+	readyWait time.Duration
 }
 
 func newEnv(t *testing.T) *env {
@@ -115,14 +119,18 @@ func (e *env) openWith(adjust func(*tuning)) *Store {
 	e.t.Helper()
 	tn := tuning{procs: e.procs, debounce: 20 * time.Millisecond, poll: 50 * time.Millisecond, sweep: time.Hour, workers: 3, entries: 4}
 	adjust(&tn)
-	s, err := newStore(Options{ClaudeDir: e.dir, CacheDir: e.cache, Prices: map[string]Price{"claude-test-2": {Input: 1, Output: 2}}}, tn)
+	s, err := newStore(Options{ClaudeDir: e.dir, CacheDir: e.cache, MeterDir: e.meter, Prices: map[string]Price{"claude-test-2": {Input: 1, Output: 2}}}, tn)
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	e.t.Cleanup(func() { _ = s.Close() })
+	wait := e.readyWait
+	if wait == 0 {
+		wait = 5 * time.Second
+	}
 	select {
 	case <-s.Ready():
-	case <-time.After(5 * time.Second):
+	case <-time.After(wait):
 		e.t.Fatal("start-up scan did not finish")
 	}
 	return s

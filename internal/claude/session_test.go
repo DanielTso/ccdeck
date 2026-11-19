@@ -30,7 +30,7 @@ func fixtureSession(t *testing.T, now string) core.Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prices, err := ReadPrices(p.ConfigFile)
+	prices, _, err := ReadPrices(p.ConfigFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestSessionFromFixture(t *testing.T) {
 	}
 
 	var wantCost float64
-	prices, _ := ReadPrices(fixturePaths(t).ConfigFile)
+	prices, _, _ := ReadPrices(fixturePaths(t).ConfigFile)
 	for m, u := range wantUsage {
 		p, _ := prices.Lookup(m)
 		wantCost += p.Cost(u)

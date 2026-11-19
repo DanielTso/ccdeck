@@ -17,6 +17,7 @@ import (
 	"github.com/DanielTso/ccdeck/internal/demo"
 	"github.com/DanielTso/ccdeck/internal/index"
 	"github.com/DanielTso/ccdeck/internal/launch"
+	"github.com/DanielTso/ccdeck/internal/meter"
 	"github.com/DanielTso/ccdeck/internal/tui"
 )
 
@@ -95,6 +96,7 @@ func openStore(s settings, cfg config.Config, log *slog.Logger, animate bool) (s
 	st, err := index.New(index.Options{
 		ClaudeDir: s.claudeDir,
 		Prices:    indexPrices(cfg.Prices),
+		MeterDir:  meterDir(),
 		Logger:    log,
 	})
 	if err != nil {
@@ -104,6 +106,16 @@ func openStore(s settings, cfg config.Config, log *slog.Logger, animate bool) (s
 		return nil, err
 	}
 	return st, nil
+}
+
+// meterDir is the status-line meter's state directory, or empty, which
+// turns the meter off, when there is no home directory to put it in.
+func meterDir() string {
+	dir, err := meter.Dir()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 // waitReady waits for the first scan, or for ctx to end.

@@ -67,7 +67,33 @@ const (
 	CostNone      CostKind = "none"      // no figure: unknown model price and nothing reported
 	CostEstimated CostKind = "estimated" // tokens multiplied by a price table
 	CostReported  CostKind = "reported"  // the total Claude Code recorded when the session ended
+	// CostClaude: Claude Code's own running figure, from the status-line
+	// meter. Still an estimate at list price, but it knows the price tiers.
+	CostClaude CostKind = "claude"
 )
+
+// Meter is what Claude Code last reported about a session through the
+// status-line helper. Nil on Session when the helper is not enabled.
+type Meter struct {
+	At             time.Time `json:"at"`             // when the report was written
+	ContextPercent float64   `json:"contextPercent"` // 0–100; valid only when HasContext
+	HasContext     bool      `json:"hasContext"`
+	ContextWindow  int64     `json:"contextWindow"`
+	ContextTokens  int64     `json:"contextTokens"`
+	CostUSD        float64   `json:"costUSD"`
+	LinesAdded     int       `json:"linesAdded"`
+	LinesRemoved   int       `json:"linesRemoved"`
+}
+
+// RateLimit is one usage window of the account.
+type RateLimit struct {
+	Window      string    `json:"window"`      // "5h", "7d" or "spend"
+	UsedPercent float64   `json:"usedPercent"` // may exceed 100 for spend
+	ResetsAt    time.Time `json:"resetsAt"`
+	UsedUSD     float64   `json:"usedUSD,omitempty"` // spend only; 0 when unknown
+	LimitUSD    float64   `json:"limitUSD,omitempty"`
+	Period      string    `json:"period,omitempty"` // spend only: daily, weekly, monthly
+}
 
 // Live describes the running process that owns a session.
 type Live struct {
@@ -127,6 +153,10 @@ type Session struct {
 	Subagents []Subagent `json:"subagents,omitempty"` // most recently active first
 
 	Live *Live `json:"live,omitempty"` // nil when no process is running the session
+
+	// Meter is Claude Code's last status-line report for the session; nil
+	// when the helper is not enabled or has not run for it.
+	Meter *Meter `json:"meter,omitempty"`
 }
 
 // Status reports the live status, or StatusEnded when nothing is running.
@@ -237,6 +267,13 @@ type Store interface {
 	// Subscribe delivers change events until cancel is called. The channel is
 	// buffered and never blocks the store.
 	Subscribe() (events <-chan Event, cancel func())
+	// Limits returns the account's rate-limit windows as reported by the
+	// status-line helper for this store's sessions, and when the newest
+	// report behind those figures was written. The newest report decides
+	// which windows exist; each window carries the freshest figure any
+	// report gives. Windows whose reset time has passed are dropped. Empty
+	// when the status-line helper is not enabled.
+	Limits() (limits []RateLimit, at time.Time)
 	// Close stops watchers and releases resources.
 	Close() error
 }

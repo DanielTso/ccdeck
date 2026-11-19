@@ -92,6 +92,9 @@ func (s *Store) onEvent(ev fsnotify.Event) bool {
 	name := filepath.Clean(ev.Name)
 	projects, sessions := s.paths.ProjectsDir(), s.paths.SessionsDir()
 	switch dir := filepath.Dir(name); {
+	case s.meterDir != "" && (dir == s.meterDir || name == s.meterDir):
+		s.mark(func(p *pending) { p.meter = true })
+		return true
 	case name == projects:
 		if ev.Has(fsnotify.Create) {
 			s.watchTree(name)

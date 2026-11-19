@@ -410,3 +410,42 @@ func TestOnUsageSplitMessage(t *testing.T) {
 		t.Errorf("output increments = %v, want %v (the hook survives Reset)", outputs, want)
 	}
 }
+
+// ContextAt follows the latest main-thread assistant line: later lines of
+// the same message move it, sidechain lines, user lines and lines without a
+// timestamp do not, and it survives the cache.
+func TestContextAt(t *testing.T) {
+	asst := func(ts, id string, side bool) string {
+		return line(`"type":"assistant"`, `"timestamp":"`+ts+`"`, `"isSidechain":`+map[bool]string{true: "true", false: "false"}[side],
+			`"message":{"id":"`+id+`","model":"claude-test-1","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":10}}`)
+	}
+	user := line(`"type":"user"`, `"timestamp":"2026-01-10T10:09:00.000Z"`, `"isSidechain":false`, `"message":{"content":"go on"}`)
+	noTime := line(`"type":"assistant"`, `"isSidechain":false`,
+		`"message":{"id":"m9","model":"claude-test-1","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":10}}`)
+
+	if got := NewAccumulator().ContextAt(); !got.IsZero() {
+		t.Errorf("empty accumulator: ContextAt = %v, want zero", got)
+	}
+	acc := foldLines(
+		asst("2026-01-10T10:00:00.000Z", "m1", false),
+		asst("2026-01-10T10:00:02.500Z", "m1", false), // second line of m1
+		asst("2026-01-10T10:05:00.000Z", "s1", true),  // sidechain
+		user,
+		noTime,
+	)
+	want := at(t, "2026-01-10T10:00:02.500Z")
+	if got := acc.ContextAt(); !got.Equal(want) {
+		t.Errorf("ContextAt = %v, want %v", got, want)
+	}
+	data, err := json.Marshal(acc.State())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st State
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.ContextAt.Equal(want) {
+		t.Errorf("ContextAt after a JSON round trip = %v, want %v", st.ContextAt, want)
+	}
+}

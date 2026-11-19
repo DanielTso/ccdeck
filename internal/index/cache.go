@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -15,16 +16,20 @@ import (
 // cacheVersion is the version of the cache file format. Bump it whenever
 // cacheFile or anything it holds changes meaning; a file with another
 // version, or another claude.StateVersion, is ignored and rewritten.
-const cacheVersion = 2
+// Version 3 added Thresholds, with usage filed by price tier.
+const cacheVersion = 3
 
 // cacheFile is the on-disk cache: derived numbers and identifiers per
 // transcript, never conversation text. claude.State guarantees that for the
 // accumulator; subagent meta files, which hold descriptions, are not cached.
 type cacheFile struct {
-	Version      int                   `json:"version"`
-	StateVersion int                   `json:"stateVersion"`
-	Dir          string                `json:"dir"` // the Claude directory
-	Files        map[string]cachedFile `json:"files"`
+	Version      int    `json:"version"`
+	StateVersion int    `json:"stateVersion"`
+	Dir          string `json:"dir"` // the Claude directory
+	// Thresholds are the long-prompt thresholds the states were folded
+	// with: under others, usage would be filed under other tier keys.
+	Thresholds claude.Thresholds     `json:"thresholds,omitempty"`
+	Files      map[string]cachedFile `json:"files"`
 }
 
 // cachedFile is one transcript, main or subagent, keyed by its path.
@@ -61,7 +66,8 @@ func (s *Store) loadCache() map[string]cachedFile {
 		s.log.Warn("index: decode cache", "err", err)
 		return nil
 	}
-	if c.Version != cacheVersion || c.StateVersion != claude.StateVersion || c.Dir != s.paths.Dir {
+	if c.Version != cacheVersion || c.StateVersion != claude.StateVersion || c.Dir != s.paths.Dir ||
+		!maps.Equal(c.Thresholds, s.thresholds) {
 		return nil
 	}
 	return c.Files
@@ -77,6 +83,7 @@ func (s *Store) save() {
 		Version:      cacheVersion,
 		StateVersion: claude.StateVersion,
 		Dir:          s.paths.Dir,
+		Thresholds:   s.thresholds,
 		Files:        map[string]cachedFile{},
 	}
 	for path, cf := range s.prevCache {

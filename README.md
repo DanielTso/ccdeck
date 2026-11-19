@@ -10,78 +10,83 @@ use ccdeck to see what is going on and to get back into a session.
 
 ## What it looks like
 
-These captures come from `ccdeck --demo`, which runs on invented data. Colours are not shown; every status also
-has its own glyph and word (`●` busy, `○` idle, `◆` waiting, `?` unknown, `·` ended).
+These captures come from `ccdeck --demo`, which runs on invented data, including the figures of the opt-in
+[status-line meter](#status-line-meter-opt-in): the rate-limit badge in the top bar and Claude Code's own context
+and cost in the preview. Colours are not shown; every status also has its own glyph and word (`●` busy, `○` idle,
+`◆` waiting, `?` unknown, `·` ended).
 
 **Sessions** (key `1`): the list on the left, the selected session on the right.
 
 ```text
- ccdeck  1 Sessions  2 Live  3 Usage                        ◆ 1 waiting  ● 1 busy  ○ 2 idle  ? 1 unknown  12 sessions
- Sessions                          all · recent  12 │ Refactor the rate limiter to use a token bucket per tenant and
-▌● Refactor the rate limiter … orbit-api   63%  now │ add metrics for rejected requests
- ○ kiln-7                      kiln          —  now │ ● busy for 2m · orbit-api-3
- ? Port the config loader to … kiln        10%   2m │
- ◆ Fix the flaky refund test … orbit-api   29%   3m │ project  orbit-api  /home/demo/src/orbit-api
- ○ Migrate the build from Mak… lattice     95%  11m │ branch   feat/tenant-rate-limit
- · 認証フローのリファクタリン… tide-ui     35%  47m │ model    opus 5.5  v2.1.3
- · Add a dark mode toggle 🌙 … tide-ui     16%   3h │ started  1h ago · Nov 18 20:27
- · Draft the Q3 architecture … field-not…  88k   5h │ context  ━━━━━━━━━━━━━━━━─────────  63%  126k / 200k
- · Investigate memory growth … lattice     51%   1d │ tokens   3.42M total · 328k fresh · 26k out
- · Write an ADR comparing eve… orbit-api   32%   3d │ cost     ~$2.76  estimate
- · Bump dependencies and fix … ledger-sy…  22%  12d │ turns    6 prompts · 43 replies · 25 tool calls
- · Tidy shell aliases          dotfiles     4%   5w │
-                                                    │ agents   3
-                                                    │          Explore       Find every caller of Limit…    52k   2m
-                                                    │          general-pur…  Draft metric names that fo…    52k   9m
-                                                    │          code-review…  Review the tenant limiter …    41k  16m
-                                                    │
-                                                    │ ──────────────────────────────────────────────────────────────
-                                                    │   should keep a global budget, so I'll keep the old type as
-                                                    │   `GlobalLimiter` and add `TenantLimiter` beside it.
-                                                    │   ▸ Write internal/ratelimit/tenant.go
-                                                    │     ↳ Created internal/ratelimit/tenant.go (+84 lines)
-                                                    │   ▸ Bash go test ./internal/ratelimit/...
-                                                    │     ✗ --- FAIL: TestTenantBurst (0.00s)
-                                                    │   The burst test is off by one: the bucket starts full and
-                                                    │   refills in the same tick. I'll refill before taking a token.
-                                                    │   ∴ thinking: Checking how this interacts with the existing t…
- enter focus  f fork  n new  o transcript  / filter  p search  s sort  g group  a scope                ? help  q quit
+ ccdeck  1 Sessions  2 Live  3 Usage    5h ▇ 84%! ↻1h11m  ◆ 1 waiting  ● 1 busy  ○ 2 idle  ? 1 unknown  12 sessions
+ Sessions                         all · recent  12 │ Refactor the rate limiter to use a token bucket per tenant
+▌● Refactor the rate limiter to use a t…  62%  now │ and add metrics for rejected requests
+ ○ kiln-7                                   —  now │ ● busy for 1m · orbit-api-3
+ ? Port the config loader to TOML         10%   2m │
+ ◆ Fix the flaky refund test in payments  29%   3m │ project  orbit-api  /home/demo/src/orbit-api
+ ○ Migrate the build from Make to Bazel…  95%  11m │ branch   feat/tenant-rate-limit
+ · 認証フローのリファクタリングとエラー…  35%  47m │ model    opus 5.5  v2.1.3
+ · Add a dark mode toggle 🌙 to the set…  16%   3h │ started  1h ago · Nov 19 02:27
+ · Draft the Q3 architecture review fro…  88k   5h │ context  ━━━━━━━━━━━━────────  62%  124k / 200k · Claude Code
+ · Investigate memory growth in the job…  51%   1d │ tokens   3.29M total · 325k fresh · 25k out
+ · Write an ADR comparing event sourcin…  32%   3d │ cost     ~$2.69  Claude Code's estimate
+ · Bump dependencies and fix the two br…  22%  12d │ turns    6 prompts · 42 replies · 25 tool calls
+ · Tidy shell aliases                      4%   5w │
+                                                   │ agents   3
+                                                   │          Explore       Find every caller of Limi…    52k   2m
+                                                   │          general-pur…  Draft metric names that f…    52k   9m
+                                                   │          code-review…  Review the tenant limiter…    41k  16m
+                                                   │
+                                                   │ ─────────────────────────────────────────────────────────────
+                                                   │   ▸ Agent Find every caller of Limiter.Allow
+                                                   │     ↳ 3 callers: http/middleware.go:42, admin/handler.go:88,…
+                                                   │   There are three callers. The admin handler and the worker
+                                                   │   should keep a global budget, so I'll keep the old type as
+                                                   │   `GlobalLimiter` and add `TenantLimiter` beside it.
+                                                   │   ▸ Write internal/ratelimit/tenant.go
+                                                   │     ↳ Created internal/ratelimit/tenant.go (+84 lines)
+                                                   │   ▸ Bash go test ./internal/ratelimit/...
+                                                   │     ✗ --- FAIL: TestTenantBurst (0.00s)
+                                                   │   The burst test is off by one: the bucket starts full and
+                                                   │   refills in the same tick. I'll refill before taking a
+                                                   │   token.
+ enter focus  f fork  n new  o transcript  / filter  p search  s sort  g group  a scope              ? help  q quit
 ```
 
 **Live** (key `2`): one pane per running session, each following its conversation. A session that is waiting for
 you (here, to approve a command) gets a double border and a `WAITING` badge.
 
 ```text
- ccdeck  1 Sessions  2 Live  3 Usage                        ◆ 1 waiting  ● 1 busy  ○ 2 idle  ? 1 unknown  12 sessions
-╔═ ▶1  ◆ WAITING  3m ═════════════════════════════════════╗╭─ 2 ○ idle 1m ───────────────────────────────────────────╮
-║ Fix the flaky refund test in payments                   ║│ kiln-7                                                  │
-║ orbit-api · sonnet 5 · ━───  29% · ~$0.40               ║│ kiln · — · —                                            │
-║ ▶ needs you: approve Bash: go test ./internal/payments… ║│ ─────────────────────────────────────────────────────── │
-║ ─────────────────────────────────────────────────────── ║│ Nothing said yet.                                       │
-║   The test reads the ledger before the async writer     ║│                                                         │
-║   flushes. I'll give the writer a Flush method and call ║│                                                         │
-║   it in the test instead of sleeping.                   ║│                                                         │
-║   ▸ Edit internal/payments/ledger.go                    ║│                                                         │
-║     ↳ Updated internal/payments/ledger.go (+12 −3)      ║│                                                         │
-║   Now I want to run it 200 times with the race detector ║│                                                         │
-║   to be sure.                                           ║│                                                         │
-╚═══════════════════════════════════════════ orbit-api-4 ═╝╰──────────────────────────────────────────────── kiln-7 ─╯
-╭─ 3 ● busy 2m ───────────────────────────────────────────╮╭─ 4 ? unknown 2m ────────────────────────────────────────╮
-│ Refactor the rate limiter to use a token bucket per te… ││ Port the config loader to TOML                          │
-│ orbit-api · opus 5.5 · ━━━─  65% · ~$2.91               ││ kiln · haiku 4.5 · ━───  10% · ~$0.06                   │
-│ ─────────────────────────────────────────────────────── ││ ─────────────────────────────────────────────────────── │
-│   ▸ Bash go test ./internal/ratelimit/...               ││ › Port the config loader from YAML to TOML and keep     │
-│     ✗ --- FAIL: TestTenantBurst (0.00s)                 ││   reading the old file for one release.                 │
-│   The burst test is off by one: the bucket starts full  ││   ▸ Read internal/config/load.go                        │
-│   and refills in the same tick. I'll refill before      ││     ↳ package config … (96 lines)                       │
-│   taking a token.                                       ││                                                         │
-│   ∴ thinking: Checking how this interacts with the exi… ││                                                         │
-│   Next I'll look at the callers before changing the     ││                                                         │
-│   signature.                                            ││                                                         │
-│   ▸ Grep func New in internal/                          ││                                                         │
-╰─────────────────────────────────────────── orbit-api-3 ─╯╰──────────────────────────────────────────────── kiln-6 ─╯
+ ccdeck  1 Sessions  2 Live  3 Usage    5h ▇ 84%! ↻1h11m  ◆ 1 waiting  ● 1 busy  ○ 2 idle  ? 1 unknown  12 sessions
+╔═ ▶1  ◆ WAITING  3m ════════════════════════════════════╗╭─ 2 ○ idle 1m ──────────────────────────────────────────╮
+║ Fix the flaky refund test in payments                  ║│ kiln-7                                                 │
+║ orbit-api · sonnet 5 · ━───  29% · ~$0.40              ║│ kiln · — · —                                           │
+║ ▶ needs you: approve Bash: go test ./internal/payment… ║│ ────────────────────────────────────────────────────── │
+║ ────────────────────────────────────────────────────── ║│ Nothing said yet.                                      │
+║   The test reads the ledger before the async writer    ║│                                                        │
+║   flushes. I'll give the writer a Flush method and     ║│                                                        │
+║   call it in the test instead of sleeping.             ║│                                                        │
+║   ▸ Edit internal/payments/ledger.go                   ║│                                                        │
+║     ↳ Updated internal/payments/ledger.go (+12 −3)     ║│                                                        │
+║   Now I want to run it 200 times with the race         ║│                                                        │
+║   detector to be sure.                                 ║│                                                        │
+╚══════════════════════════════════════════ orbit-api-4 ═╝╰─────────────────────────────────────────────── kiln-7 ─╯
+╭─ 3 ● busy 2m ──────────────────────────────────────────╮╭─ 4 ? unknown 2m ───────────────────────────────────────╮
+│ Refactor the rate limiter to use a token bucket per t… ││ Port the config loader to TOML                         │
+│ orbit-api · opus 5.5 · ━━━─  63% · ~$2.76              ││ kiln · haiku 4.5 · ━───  10% · ~$0.06                  │
+│ ────────────────────────────────────────────────────── ││ ────────────────────────────────────────────────────── │
+│   beside it.                                           ││ › Port the config loader from YAML to TOML and keep    │
+│   ▸ Write internal/ratelimit/tenant.go                 ││   reading the old file for one release.                │
+│     ↳ Created internal/ratelimit/tenant.go (+84 lines) ││   ▸ Read internal/config/load.go                       │
+│   ▸ Bash go test ./internal/ratelimit/...              ││     ↳ package config … (96 lines)                      │
+│     ✗ --- FAIL: TestTenantBurst (0.00s)                ││                                                        │
+│   The burst test is off by one: the bucket starts full ││                                                        │
+│   and refills in the same tick. I'll refill before     ││                                                        │
+│   taking a token.                                      ││                                                        │
+│   ∴ thinking: Checking how this interacts with the ex… ││                                                        │
+╰────────────────────────────────────────── orbit-api-3 ─╯╰─────────────────────────────────────────────── kiln-6 ─╯
  4 panes · 5 live · 1 without a pane:  ○ Migrate the build from …  + adds a pane
- enter focus  tab next pane  z zoom  + more panes  - fewer panes  o transcript                         ? help  q quit
+ enter focus  tab next pane  z zoom  + more panes  - fewer panes  o transcript                       ? help  q quit
 ```
 
 ## Install
@@ -93,8 +98,10 @@ make install                                      # from a checkout; embeds vers
 go install github.com/DanielTso/ccdeck@latest     # once the repository is published
 ```
 
-Both put `ccdeck` in `$GOBIN` (default `~/go/bin`). `make build` writes `./bin/ccdeck` instead. A build made with
-plain `go install` reports its version as `dev (none)`; `make install` embeds `git describe`.
+Both put `ccdeck` in `$GOBIN` (default `~/go/bin`). `make build` writes `./bin/ccdeck` instead. `ccdeck version`
+(or `ccdeck --version`) prints the version and the commit: `make install` embeds `git describe`, and a build
+without those flags takes what Go records in the binary instead, so `go install …@v0.1.0` reports `ccdeck v0.1.0`
+and a build from a checkout reports the commit it was built from, marked `-dirty` when the tree had changes.
 
 Tagged releases (`vX.Y.Z`) publish `tar.gz` archives for Linux and macOS (amd64 and arm64) via GoReleaser;
 `make snapshot` builds them locally without publishing. Linux (WSL2 included) is the primary target; see
@@ -117,7 +124,8 @@ live grid, `3` shows usage, `o` opens the full transcript, and `?` lists every k
 ## Views
 
 Four views. `1`, `2` and `3` switch between the first three; the transcript opens from any of them with `o`. The
-header shows the view tabs and a count of sessions by status. The terminal window title becomes
+header shows the view tabs, the tightest rate limit when the [status-line meter](#status-line-meter-opt-in)
+reports one, and a count of sessions by status. The terminal window title becomes
 `ccdeck · N waiting` while any session is waiting for you.
 
 ### Keys that work everywhere
@@ -140,7 +148,8 @@ unfolds it. `ctrl+c` always quits, even if you rebind `quit`.
 ### Sessions (`1`)
 
 Every session in every project. Each row shows a status mark, title, project, how full the context window is (or
-the token count when the window size is unknown) and time since last activity. The preview shows project, branch,
+the token count when the window size is unknown) and time since last activity; a list 78 columns wide or more
+adds the model, and one 110 or more draws a gauge bar beside the percentage. The preview shows project, branch,
 model, start time, context, tokens, cost, turns, subagents and the tail of the conversation. Below 100 columns
 the preview moves under the list, and a short window hides it.
 
@@ -181,10 +190,12 @@ focused session on screen, and the other panes come back where they were when th
 
 ### Usage (`3`)
 
-Today and the last seven days: total, fresh and output tokens, estimated cost, session count; a bar per day; a
-per-model table (fresh tokens today and over 7 days, output, cache reads, share of the week); and a per-session
-table, running sessions first, with context gauge, a last-hour burn-rate sparkline, tokens per hour, fresh
-tokens and cost. "Fresh" means tokens that were not served from the prompt cache; see
+Today and the last seven days: total, fresh and output tokens, estimated cost, session count; the account's rate
+limits when the [status-line meter](#status-line-meter-opt-in) reports them; a bar per day; a per-model table (fresh
+tokens today and over 7 days, output, cache reads, share of the week; usage billed at a model's fast-mode or
+long-prompt rates has a row of its own, such as `opus 5.5 fast` or `haiku 5.5 long`); and a per-session table,
+running sessions first, with context gauge, a last-hour burn-rate sparkline, tokens per hour, fresh tokens and
+cost. "Fresh" means tokens that were not served from the prompt cache; see
 [Cost and context](#cost-and-context-figures).
 
 | Key | Action |
@@ -214,13 +225,14 @@ entries (the header says `following`); `end` returns to the bottom.
 ```text
 ccdeck                       the dashboard
 ccdeck list [--json] [--live]
-ccdeck show <id> [--json] [-n N]
+ccdeck show <id> [--json] [-n N | --entries N]
 ccdeck doctor
-ccdeck version               also: ccdeck --version
+ccdeck statusline [--wrap '<command>'] [--wrap-timeout D]   Claude Code's status-line helper (opt-in)
+ccdeck version               also: ccdeck -v, ccdeck --version
 ccdeck completion <shell>    shell completion script (generated by cobra)
 ```
 
-Flags that every command accepts:
+Flags that every command accepts, except `statusline`, which takes none of them and ignores any it is given:
 
 | Flag | Meaning |
 | --- | --- |
@@ -233,8 +245,8 @@ Flags that every command accepts:
 
 Prints sessions, most recently active first, as a table. `--live` keeps only sessions a running process owns;
 `--json` prints the sessions as a JSON array instead (the fields of `core.Session`: `id`, `title`, `projectDir`,
-`model`, `usage`, `contextTokens`, `contextWindow`, `costUSD`, `costKind` (`none`, `estimated` or `reported`),
-`live`, and so on).
+`model`, `usage`, `contextTokens`, `contextWindow`, `costUSD`, `costKind` (`none`, `estimated`, `reported` or
+`claude`), `live`, `meter` (the status-line report, when there is one), and so on).
 
 ```text
 ID        STATUS   ACTIVE  MODEL                      CONTEXT  TOKENS  COST    PROJECT                     TITLE
@@ -245,12 +257,14 @@ f60718a2  ended    5h      acme-research-preview      88.2k    1.9M    -       /
 
 `ID` is the first 8 characters; `ACTIVE` is the time since last activity (`now`, `5m`, `3h`, `2d`); `CONTEXT` is
 a percentage, or a token count when the model's window size is unknown; `TOKENS` counts everything, cache reads
-included; `COST` is `$1.50` when Claude Code reported it, `~$0.22` when estimated, `-` when unknown.
+included; `COST` is `$1.50` when Claude Code reported it, `~$0.22` when estimated (by ccdeck, or by Claude Code
+through the status-line meter), `-` when unknown.
 
 ### `ccdeck show <id>`
 
 One session's summary (status, process, project, branch, model, start and last activity, turns, context, cost,
-tokens per model, subagents) followed by its most recent conversation entries. `<id>` may be any prefix that
+the status-line meter's last report, tokens per model and price tier, such as `claude-opus-5-5 (fast)`,
+subagents) followed by its most recent conversation entries. `<id>` may be any prefix that
 matches only one session; an ambiguous or unknown prefix is an error that says so. `-n` sets how many entries to
 show (default 20, `0` for all). `--json` prints `{"session": …, "entries": […]}`.
 
@@ -260,10 +274,14 @@ Reports what ccdeck finds, then prints an example config file. Run it first when
 
 - the Claude directory and what is in it: project directories and transcripts, registry files and how many have a
   live process, prompts in `history.jsonl`, models with a known context window, models with a known price (from
-  Claude Code's price cache and from your config);
+  Claude Code's price cache, with how many have fast-mode and long-prompt rates, and from your config);
 - the result of one index scan: files read, how many were continued from the cache, lines read, **malformed lines
-  skipped**, scan time, how many directories are watched (or "polling only"), the cache file, and any warnings;
+  skipped**, scan time, how many directories are watched (or "polling only"), the cache file, the price tiers
+  used (each model's fast-mode or long-prompt usage with the number of sessions, and "no price" when it has
+  none), and any warnings;
 - the live sessions with pid, status, model and context;
+- the status-line meter: its state directory and reports, whether it is feeding (a live session has a report
+  written since it started), the rate limits last reported, and the setting that enables it when it is not;
 - `tmux` (version, and whether you are inside it), the `claude` binary, the effective resume mode, the config file
   and whether it exists, and the terminal's colour profile.
 
@@ -301,14 +319,16 @@ claude = "claude"
 # [keys]
 # quit = ["q", "ctrl+c"]
 
-# A custom theme starts from a built-in theme and overrides colour tokens.
-# Colours are "#rgb", "#rrggbb" or an ANSI number from 0 to 255.
+# A custom theme starts from a built-in or custom theme and overrides colour
+# tokens. Colours are "#rgb", "#rrggbb" or an ANSI number from 0 to 255.
 # [themes.mine]
 # base = "ember"
 # accent = "#ff8800"
 
 # Price overrides in dollars per million tokens, used to estimate cost when
-# Claude Code did not record one. Add one table per model id.
+# Claude Code did not record one. Add one table per model id; a model id
+# ending in +fast, +long or +fast+long prices that model's fast-mode or
+# long-prompt usage, which otherwise has the rates in Claude Code's cache.
 # [prices."example-model"]
 # input = 3.0
 # output = 15.0
@@ -323,8 +343,11 @@ Rules:
 - Unknown keys, a bad value or an out-of-range number are errors that name the key (for example
   `key layout.live_panes: 20 is outside 1 to 16`), so typos are caught rather than ignored.
 - `layout.preview_ratio` is 0.2 to 0.8; `layout.live_panes` is 1 to 16.
+- A `[prices]` model id may end in `+fast`, `+long` or `+fast+long` (see [price tiers](#cost-and-context-figures));
+  any other `+` suffix is an error.
 - `theme` unset picks `ember` or `paper` from the terminal's background colour. `--theme` overrides the file.
-- `XDG_CONFIG_HOME` is used only when it is an absolute path.
+- `XDG_CONFIG_HOME` (like `XDG_CACHE_HOME` and `XDG_STATE_HOME`, for the cache and the meter) is used only when
+  it is an absolute path.
 
 ### Key bindings
 
@@ -338,6 +361,7 @@ its keys; actions you leave out keep their defaults. The footer and the `?` over
 | move | `up` (up, k), `down` (down, j), `page_up` (pgup, ctrl+u), `page_down` (pgdown, ctrl+d), `top` (home), `bottom` (end) |
 | sessions | `resume` (enter), `fork` (f), `new` (n), `filter` (/), `search` (p), `sort` (s), `group` (g), `scope` (a) |
 | live | `next_pane` (tab), `prev_pane` (shift+tab), `zoom` (z), `more_panes` (+), `fewer_panes` (-), and `resume` (enter) |
+| usage | `resume` (enter) |
 | transcript | `next_fold` (tab), `prev_fold` (shift+tab), `expand` (enter, space), `expand_all` (e), `find` (/), `next_match` (n), `prev_match` (N) |
 
 An unknown action, an empty key list, or one key bound to two actions that are active in the same view is an error
@@ -364,9 +388,9 @@ draws without colour, keeps bold text and glyphs, and leaves the terminal's own 
 
 ### Defining a theme
 
-Add a `[themes.<name>]` table. `base` names the built-in theme to start from (default `ember`); every other key
-overrides one colour token. Your theme appears after the built-ins in the `T` cycle and can be selected with
-`theme = "<name>"` or `--theme <name>`.
+Add a `[themes.<name>]` table. `base` names the theme to start from, a built-in or another of your own (default
+`ember`); every other key overrides one colour token. Your theme appears after the built-ins in the `T` cycle and
+can be selected with `theme = "<name>"` or `--theme <name>`.
 
 ```toml
 theme = "dusk"
@@ -389,9 +413,15 @@ gauge_high = "#c23a12"
 | `error` | errors and failed tool results |
 | `gauge_low`, `gauge_mid`, `gauge_high` | the three steps of the context gauge |
 
-The base must be a built-in theme: a custom theme cannot be based on another custom theme (the example file
-printed by `ccdeck doctor` says otherwise, but ccdeck refuses it at start-up). A custom theme cannot reuse a
-built-in's name. An unknown token or a bad colour is an error that names the theme and the token.
+A custom theme may be based on another custom theme, which may have a base of its own: a theme takes the colours of
+its base and its base's bases, and its own keys win. A chain may hold up to five custom themes, itself included.
+```toml
+[themes.dusk-wide]       # dusk, with a different accent
+base = "dusk"
+accent = "#3f7442"
+```
+A base that does not exist, a cycle (`a` on `b` on `a`), a chain that is too deep, a custom theme with a built-in's
+name, an unknown token and a bad colour are errors that name the key (for example `key themes.dusk-wide.base`).
 
 ## Resume, fork, new and focus
 
@@ -424,6 +454,70 @@ Resume, fork and new fail with a message in the status line, and nothing is star
 directory no longer exists, when `claude` is not found, or when a tmux mode is configured outside tmux. In
 `--demo` the projects do not exist, so these actions fail by design.
 
+## Status-line meter (opt-in)
+
+Claude Code's files do not hold three things Claude Code knows: its own context-window figure, its own running
+cost, and your account's rate limits (the 5-hour and 7-day windows of a subscription, or a gateway's spend limit).
+Claude Code hands all three to a status-line command on every refresh. `ccdeck statusline` is such a command: it
+records them for the dashboard and prints a status line.
+
+**Enabling it.** Add this to Claude Code's `settings.json` (`~/.claude/settings.json`, or a project's
+`.claude/settings.json`). ccdeck never edits that file; `ccdeck doctor` prints the snippet when the meter is not
+feeding.
+
+```json
+{ "statusLine": { "type": "command", "command": "ccdeck statusline", "refreshInterval": 30 } }
+```
+
+Use the full path to `ccdeck` if it is not on the `PATH` Claude Code runs with. `refreshInterval` (seconds) keeps
+the figures current while a session is idle; without it Claude Code runs the command only when something happens.
+The line it prints looks like `Opus · ctx 42% · $1.23 · 5h 84%! resets in 1h12m`: model, context, cost and the
+tightest rate-limit window. It is fitted to the width Claude Code gives it, and a window or context at 80% or more
+is marked with `!` (and red, unless `NO_COLOR` is set).
+
+**Keeping your own status line.** If you already have one, wrap it, and its output is printed instead of ccdeck's:
+
+```json
+{ "statusLine": { "type": "command", "command": "ccdeck statusline --wrap '~/.claude/statusline.sh'" } }
+```
+
+The wrapped command runs with `sh -c`, the same JSON on stdin and the same environment. If it fails, prints nothing,
+prints more than 64 KB or runs longer than `--wrap-timeout` (default `2s`), it is stopped with everything it started
+and ccdeck's own line is printed instead. Its stderr is discarded. A command that succeeds may leave a background job
+running (a cache refresh, say); ccdeck leaves it alone, and does not wait for it beyond a tenth of a second even when
+it holds the command's output open, so output such a job prints later is not shown.
+
+**What it records.** One file per session, `$XDG_STATE_HOME/ccdeck/meter/<session id>.json` (default
+`~/.local/state/ccdeck/meter/`), mode 0600 in a 0700 directory, replaced whole on every refresh: the time, the
+context percentage, window size and tokens, the cost and the lines added and removed, and the rate-limit windows
+(use, reset time, and for a spend limit the dollar figures and period). Nothing else from the input is kept: no
+prompt, title, path, model name or session name. A session id that is not a plain id (letters, digits, `-`, `_`)
+is never used as a file name; nothing is written for it. The helper reads nothing but its stdin, never touches
+the Claude directory, and always exits 0 with a line, whatever the input; it takes a few milliseconds.
+
+**What the dashboard does with it.** When a session's report is at least as new as its latest reply, its context
+and cost are Claude Code's own (the preview says `Claude Code`, and the cost is `Claude Code's estimate`); an older
+report is shown by `ccdeck show` but does not override the transcript, which has moved on. A cost Claude Code
+recorded at the end of the session still wins. The top bar shows the tightest rate-limit window (`5h ▇ 84%!
+↻1h12m`: window, gauge, use, time to reset), and the Usage view lists every window. Without reports, none of this
+is drawn.
+
+The rate limits come only from the reports of sessions in the Claude directory ccdeck is reading (all Claude
+directories share the one state directory, and another may belong to another account). Claude Code learns them
+from its API responses, and an idle session reports the figures it last saw on every refresh, so the newest report
+is not always the freshest figure: ccdeck shows the windows of the newest report that has any, each with the
+highest use any report gives for that window (a later reset time is a later window and wins; for a spend limit,
+the most dollars spent). The age shown is that of the newest report those figures came from.
+
+**Turning it off.** Remove the `statusLine` setting (or the `ccdeck statusline` part of it, keeping your wrapped
+command), then delete the state if you like:
+
+```sh
+rm -r "${XDG_STATE_HOME:-$HOME/.local/state}/ccdeck/meter"
+```
+
+ccdeck also deletes the reports of sessions that are no longer running after 30 days.
+
 ## Cost and context figures
 
 Everything here is derived from Claude Code's transcripts. The formats are observed, not documented, and may
@@ -437,7 +531,8 @@ cache reads; *fresh* is input, output and cache writes, which is the better meas
 are part of output.
 
 **Context.** The context size is input plus cache-read plus cache-creation tokens of the latest main-thread
-message (subagents do not count). The percentage is against the model's window from Claude Code's model catalog
+message (subagents do not count), or Claude Code's own figure when the
+[status-line meter](#status-line-meter-opt-in) reported it since that message. The percentage is against the model's window from Claude Code's model catalog
 (`cache/model-catalog/*.json`), matched by exact model id, then by prefix. An unknown model has no window, so you
 see the token count without a percentage. The gauge stops at 100%.
 
@@ -446,14 +541,36 @@ see the token count without a percentage. The gauge stops at 100%.
 1. The total Claude Code recorded when the session ended, shown plainly (`$1.50`, "reported"). It is used only
    while nothing has been added since: once you resume the session and a new response arrives, ccdeck goes back
    to estimating.
-2. Otherwise tokens multiplied by prices, shown with a tilde (`~$0.22`, "estimate"). Prices come from `[prices]`
+2. Otherwise Claude Code's own running figure, when the [status-line meter](#status-line-meter-opt-in) reported
+   it since the latest reply, shown with a tilde (`~$0.22`, "Claude Code's estimate"). It is still an estimate at
+   list price.
+3. Otherwise tokens multiplied by prices, shown with a tilde (`~$0.22`, "estimate"). Prices come from `[prices]`
    in your config file, then from the price cache Claude Code keeps in `~/.claude.json`
    (`additionalModelCostsCache`; if `--claude-dir` or `CLAUDE_CONFIG_DIR` is set and that directory has its own
    `.claude.json`, that file). ccdeck contains no price list of its own. Model ids match exactly, then by prefix
    (`claude-x-1` prices `claude-x-1-20260101`). Cache writes with no 5-minute/1-hour split count as 5-minute
-   writes. Web searches are priced only when Claude Code's cache has a per-request price.
-3. If any model used in the session, subagents included, has no price: a dash (`-` on the command line, `—` in
-   the dashboard), and tokens only.
+   writes. Web searches are priced only when Claude Code's cache has a per-request price. Each response is priced
+   in the tier it was served in (see "Price tiers" below).
+4. If any model used in the session, subagents included, has no price: a dash (`-` on the command line, `—` in
+   the dashboard), and tokens only. A tier counts as a model here: fast-mode usage of a model that has no fast
+   rates has no price, rather than the base rate.
+
+**Price tiers.** Claude Code's price cache gives some models higher rates for responses served in fast mode and
+for long prompts. ccdeck prices each response the way Claude Code does:
+
+- *Fast mode*: the transcript records the speed of every response (`usage.speed`, `standard` or `fast`). A fast
+  response is priced at the model's `fast` rates. A speed ccdeck does not know is counted apart (shown as
+  `speed?`) and has no price, so a session with one shows tokens only instead of a guess.
+- *Long prompts*: a model's `longPrompt` rates apply to a response whose prompt (input, cache reads and cache
+  writes together) is above the model's `abovePromptTokens`; at exactly the threshold the base rates apply. Every
+  token of that response, output included, is then priced at the long-prompt rates; web searches stay at the base
+  rate. When a response lists the requests it took (`usage.iterations`), each request is judged on its own, as
+  Claude Code does. The threshold comes from Claude Code's price cache only.
+- A response that is both fast and long is counted as `+fast+long`. Claude Code's cache has no rates for that
+  combination, so it has no price unless your config gives one.
+- Usage is kept per tier: the Usage view's model table, `ccdeck show` and `ccdeck doctor` list `opus 5.5 fast`
+  apart from `opus 5.5`. The session's model stays the plain model id. To override a tier's price, name it in the
+  config: `[prices."claude-opus-5-5+fast"]`; a `[prices."claude-opus-5-5"]` table does not change the fast rates.
 
 Limits to keep in mind:
 
@@ -461,24 +578,28 @@ Limits to keep in mind:
   charges differently are not modelled. Claude Code often records `0` on subscription plans, which is why most
   figures are estimates.
 - A `[prices."model"]` table replaces that model's whole price, and the fields you leave out count as `0`. Give
-  all five.
+  all five. The same goes for Claude Code's own price cache: an entry with no 1-hour cache-write rate prices
+  1-hour cache writes at `0` (Claude Code uses the 5-minute rate for them).
 - The Usage view's daily and seven-day figures are always estimates from tokens (never the reported totals), so
   they need not equal the sum of the session figures. A day on which any model has no price shows "no price
   known"; the seven-day figure then leaves that day out and says so, as `≥ ~$X partial estimate`. The seven-day
   session count counts each session once, however many days it was active.
-- Claude Code's price cache has higher rates for some models in fast mode and for long prompts. ccdeck prices
-  every message at the base rate, so sessions that use fast mode or very long prompts on such a model are
-  underestimated.
+- Which responses were long is decided when a transcript is read, with the thresholds in Claude Code's price cache
+  at that time. When a threshold changes, ccdeck reads every transcript again (at its next full rescan, within
+  half a minute, or at its next start).
+- Claude Code charges 10% more for responses it records as served in the US only (`usage.inference_geo` `us`).
+  ccdeck does not model that surcharge; such responses are estimated at the global rate.
 - Times and "today" use your local time zone.
 
 ## Privacy
 
 ccdeck runs locally. It makes no network connections, sends no telemetry and fetches no prices; the only
-programs it starts are `claude` and `tmux`, when you ask.
+programs it starts are `claude` and `tmux`, when you ask (and, for the status-line helper, the command you give
+`--wrap`).
 
 - **Reads**: under the Claude directory, session transcripts and subagent transcripts (`projects/`), the live
-  session registry (`sessions/*.json`), `history.jsonl`, and the model catalog; plus `~/.claude.json`, of which it
-  uses only the price cache. It never opens `sessions/*.key` or the sockets, and it skips the transcript line
+  session registry (`sessions/*.json`), `history.jsonl`, and the model catalog; plus Claude Code's global config file
+  (`~/.claude.json`, or `.claude.json` inside a Claude directory you name), of which it uses only the price cache. It never opens `sessions/*.key` or the sockets, and it skips the transcript line
   types that carry prompt plumbing and account details.
 - **Writes**: nothing under the Claude directory. Its only file is a cache of derived numbers at
   `$XDG_CACHE_HOME/ccdeck/` (default `~/.cache/ccdeck/`), one `index-<hash>.json` per Claude directory, mode 0600
@@ -487,6 +608,9 @@ programs it starts are `claude` and `tmux`, when you ask.
   and byte offsets. It holds no conversation text, titles or prompts. Delete it whenever you like; the next start
   re-reads the transcripts.
 - Conversation text is read from the transcripts when a view needs it and kept in memory only while ccdeck runs.
+- **Status-line meter** (only if you enable it): `ccdeck statusline` reads the JSON Claude Code passes on stdin and
+  writes numbers only to `$XDG_STATE_HOME/ccdeck/meter/` (see
+  [what it records](#status-line-meter-opt-in)). With `--wrap` it also starts the command you name.
 
 ## Platforms
 
@@ -515,7 +639,8 @@ make help         # all targets
 
 Layout: `cmd/` (cobra commands), `internal/core` (the shared types: session, store, launcher),
 `internal/claude` (parsers for the Claude directory), `internal/index` (scan, cache, watch),
-`internal/demo` (the `--demo` data), `internal/config`, `internal/launch` and `internal/tui` (Bubble Tea v2).
+`internal/meter` (the status-line meter's input and state files), `internal/demo` (the `--demo` data),
+`internal/config`, `internal/launch` and `internal/tui` (Bubble Tea v2).
 `docs/ARCHITECTURE.md` describes the design, the on-disk formats and the hard rules. The tests use only
 synthetic fixtures and never read your real `~/.claude`.
 
