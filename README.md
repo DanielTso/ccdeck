@@ -1,5 +1,9 @@
 # ccdeck
 
+[![CI](https://github.com/DanielTso/ccdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielTso/ccdeck/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/DanielTso/ccdeck)](https://github.com/DanielTso/ccdeck/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 `ccdeck` is a terminal dashboard for Claude Code sessions. It lists every session in every project, follows the
 running ones (status, context fill, tokens, cost), shows several live conversations side by side, and hands the
 terminal to `claude` when you want to resume one.
@@ -659,3 +663,6 @@ tmux kill-session -t ccdeck-test
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+ccdeck is an independent project. It is not affiliated with or endorsed by Anthropic; Claude and Claude Code are
+Anthropic's products.
