@@ -69,6 +69,8 @@ func TestSessionOf(t *testing.T) {
 		ok         bool
 	}{
 		{"/c/projects/-p/abc.jsonl", "abc", true},
+		{"/c/projects/-p/abc", "abc", true},
+		{"/c/projects/-p/abc.jsonl.tmp", "", false},
 		{"/c/projects/-p/abc/subagents/agent-1.jsonl", "abc", true},
 		{"/c/projects/-p/abc/subagents/workflows/wf/agent-2.meta.json", "abc", true},
 		{"/c/projects/-p", "", false},

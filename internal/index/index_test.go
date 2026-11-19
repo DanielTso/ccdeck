@@ -9,8 +9,11 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/DanielTso/ccdeck/internal/core"
 )
@@ -116,6 +119,53 @@ func TestNewSessionInNewProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the session to go", func() bool { _, ok := s.Session(sessB); return !ok })
+}
+
+// A subagent's directories are created and its transcript written faster
+// than the store can add watches. Whichever directory's Create event is
+// handled late, after the whole tree and the file exist, the subagent is
+// found without waiting for the sweep (which these tests never run).
+func TestSubagentTreeWrittenBeforeItsWatch(t *testing.T) {
+	levels := []string{sessB, "subagents", "workflows", "r"}
+	for held := range levels {
+		t.Run("held "+levels[held], func(t *testing.T) {
+			e := newEnv(t)
+			proj := "projects/-home-user-fresh/"
+			e.write(transcript("-home-user-fresh", sessB), userLine(t, t0, "Hello there"))
+			release := make(chan struct{})
+			heldDir := e.path(proj + strings.Join(levels[:held+1], "/"))
+			s := e.openWith(func(tn *tuning) {
+				tn.beforeEvent = func(ev fsnotify.Event) {
+					if ev.Name == heldDir && ev.Has(fsnotify.Create) {
+						<-release
+					}
+				}
+			})
+			free := sync.OnceFunc(func() { close(release) })
+			t.Cleanup(free) // before Close, which waits for the held event
+			if _, ok := s.Session(sessB); !ok {
+				t.Fatal("no session to begin with")
+			}
+			// The directories above the held one are created one at a
+			// time, each watched before the next appears.
+			for i := range held {
+				rel := proj + strings.Join(levels[:i+1], "/")
+				e.mkdir(rel)
+				waitFor(t, "a watch on "+levels[i], func() bool { return slices.Contains(s.w.WatchList(), e.path(rel)) })
+			}
+			// The rest appears while the store is held up.
+			e.write(proj+strings.Join(levels, "/")+"/agent-y.jsonl", subagentLine(t, t0, "msg_y", 7, 1))
+			free()
+			waitFor(t, "the new subagent", func() bool { return len(session(t, s, sessB).Subagents) == 1 })
+
+			// Moved away with its subagents, the session's directory sends
+			// the only event: its contents are not deleted.
+			if err := os.Rename(e.path(proj+sessB), e.path("moved")); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "the moved subagent to go", func() bool { return len(session(t, s, sessB).Subagents) == 0 })
+		})
+	}
 }
 
 func TestProjectsDirCreatedLater(t *testing.T) {

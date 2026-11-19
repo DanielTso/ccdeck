@@ -299,7 +299,9 @@ directory.
 - **Watching:** fsnotify on the Claude directory, `projects/`, each project
   directory, each `<sessionId>/subagents/` directory, `sessions/`, and the meter
   directory once it exists. Watches are not recursive: add new directories on
-  `Create` and rescan them after adding the watch. Debounce bursts (100 ms). A
+  `Create` and rescan them after adding the watch. A session's own directory
+  counts as the session's (it can appear with its whole subagents tree already
+  written), so its events refresh the session. Debounce bursts (100 ms). A
   poll every 2 seconds notices dead pids and registry and meter changes; every
   30 seconds a sweep rereads the price cache and model catalog and revisits
   every transcript, which is the safety net for missed events (and the only

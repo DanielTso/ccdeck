@@ -253,27 +253,37 @@ func TestStatuslineWrap(t *testing.T) {
 		name    string
 		command string
 		want    string // the whole output, or "" for ccdeck's own line
+		hangs   bool   // runs until the timeout cuts it off
 		maxTook time.Duration
 	}{
-		{"passes stdin and prints the output", "wc -c", fmt.Sprintf("%d\n", len(input)), 0},
-		{"keeps several lines", `printf 'one\ntwo\nthree\n'`, "one\ntwo\nthree\n", 0},
-		{"adds a missing newline", `printf 'no newline'`, "no newline\n", 0},
-		{"keeps the environment", `printf '%s' "$COLUMNS"`, "200\n", 0},
-		{"fails", "exit 3", "", 0},
-		{"fails after printing", "echo partial; exit 1", "", 0},
-		{"prints nothing", "true", "", 0},
-		{"prints only blanks", `printf '\n  \n'`, "", 0},
-		{"is not found", "/nonexistent/command", "", 0},
-		{"prints too much", "head -c 200000 /dev/zero | tr '\\0' x", "", 0},
-		{"hangs", "sleep 30", "", 5 * time.Second},
-		{"hangs after printing", "echo partial; sleep 30", "", 5 * time.Second},
-		{"hangs in a child holding stdout", "sleep 30 & echo started; wait", "", 5 * time.Second},
-		{"exits leaving a job holding stdout", "echo mine; sleep 1 &", "mine\n", 900 * time.Millisecond},
+		{"passes stdin and prints the output", "wc -c", fmt.Sprintf("%d\n", len(input)), false, 0},
+		{"keeps several lines", `printf 'one\ntwo\nthree\n'`, "one\ntwo\nthree\n", false, 0},
+		{"adds a missing newline", `printf 'no newline'`, "no newline\n", false, 0},
+		{"keeps the environment", `printf '%s' "$COLUMNS"`, "200\n", false, 0},
+		{"fails", "exit 3", "", false, 0},
+		{"fails after printing", "echo partial; exit 1", "", false, 0},
+		{"prints nothing", "true", "", false, 0},
+		{"prints only blanks", `printf '\n  \n'`, "", false, 0},
+		{"is not found", "/nonexistent/command", "", false, 0},
+		{"prints too much", "head -c 200000 /dev/zero | tr '\\0' x", "", false, 0},
+		{"hangs", "sleep 30", "", true, 5 * time.Second},
+		{"hangs after printing", "echo partial; sleep 30", "", true, 5 * time.Second},
+		{"hangs in a child holding stdout", "sleep 30 & echo started; wait", "", true, 5 * time.Second},
+		// Waiting for the job would take its whole 5 s: the bound leaves a
+		// slow machine the rest to start the helper.
+		{"exits leaving a job holding stdout", "echo mine; sleep 5 &", "mine\n", false, 4 * time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := t.TempDir()
-			r := runHelper(t, input, state, nil, "--wrap", tt.command, "--wrap-timeout=300ms")
+			// The short timeout keeps the hanging cases quick. The long one
+			// is never reached by the others, so that a slow machine is not
+			// taken for a hang: what they check does not depend on it.
+			timeout := "10s"
+			if tt.hangs {
+				timeout = "300ms"
+			}
+			r := runHelper(t, input, state, nil, "--wrap", tt.command, "--wrap-timeout="+timeout)
 			if r.code != 0 {
 				t.Errorf("exit status %d", r.code)
 			}
@@ -337,12 +347,25 @@ func TestStatuslineWrapBackgroundJobs(t *testing.T) {
 			} else if line := r.oneLine(t); !strings.Contains(line, "Opus") {
 				t.Errorf("output %q, want ccdeck's own line", r.stdout)
 			}
-			time.Sleep(time.Second)
-			if _, err := os.Stat(marker); (err == nil) != tt.survives {
-				t.Errorf("the job ran to the end: %v, want %v", err == nil, tt.survives)
+			if tt.survives {
+				// However slow the machine, a job left running gets there.
+				deadline := time.Now().Add(10 * time.Second)
+				for !exists(marker) && time.Now().Before(deadline) {
+					time.Sleep(20 * time.Millisecond)
+				}
+			} else {
+				time.Sleep(time.Second) // twice what the job needs
+			}
+			if ran := exists(marker); ran != tt.survives {
+				t.Errorf("the job ran to the end: %v, want %v", ran, tt.survives)
 			}
 		})
 	}
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // Arguments the helper does not understand never cost the status line.

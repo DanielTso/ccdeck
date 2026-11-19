@@ -83,9 +83,23 @@ type env struct {
 	// previewDelay debounces loading entries while the selection moves.
 	previewDelay time.Duration
 
+	// waiting, when set, is applied to every command that waits for a
+	// timer or for the store rather than doing work (see wait). Tests set
+	// it to tell those commands apart: they deliver such messages
+	// themselves, and wait for every other command to finish.
+	waiting func(tea.Cmd) tea.Cmd
+
 	// ready is set once the store's start-up scan is complete: from then
 	// on a selection stays on its session, picked by the user or not.
 	ready bool
+}
+
+// wait marks cmd as one that waits for a timer or for the store.
+func (e *env) wait(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil || e.waiting == nil {
+		return cmd
+	}
+	return e.waiting(cmd)
 }
 
 // homePath shortens a path under the home directory to start with "~".

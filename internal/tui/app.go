@@ -140,9 +140,14 @@ func (m *Model) themeIndex(name string) int {
 // Init starts the store subscription and the clock, and asks for the
 // terminal background when the theme follows it.
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.waitForEvent(), tickClock()}
+	cmds := []tea.Cmd{m.env.wait(m.waitForEvent()), m.env.wait(tickClock())}
 	if ready := m.ready; ready != nil {
-		cmds = append(cmds, func() tea.Msg { <-ready; return readyMsg{} })
+		select {
+		case <-ready: // the scan is complete already: nothing to wait for
+			cmds = append(cmds, func() tea.Msg { return readyMsg{} })
+		default:
+			cmds = append(cmds, m.env.wait(func() tea.Msg { <-ready; return readyMsg{} }))
+		}
 	}
 	if m.autoTheme {
 		cmds = append(cmds, tea.RequestBackgroundColor)
@@ -199,7 +204,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg.Y--
 		return m, m.views[m.active].Update(msg)
 	case storeEventMsg:
-		return m, tea.Batch(m.storeEvent(core.Event(msg)), m.waitForEvent())
+		return m, tea.Batch(m.storeEvent(core.Event(msg)), m.env.wait(m.waitForEvent()))
 	case storeClosedMsg:
 		return m, nil
 	case readyMsg:
@@ -213,12 +218,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clockMsg:
 		// Windows reset on the clock, not on store events.
 		m.env.limits, m.env.limitsAt = m.env.store.Limits()
-		return m, tickClock()
+		return m, m.env.wait(tickClock())
 	case statusMsg:
 		m.statusID++
 		m.status = msg
 		id := m.statusID
-		return m, tea.Tick(statusFor, func(time.Time) tea.Msg { return clearStatusMsg{id} })
+		return m, m.env.wait(tea.Tick(statusFor, func(time.Time) tea.Msg { return clearStatusMsg{id} }))
 	case clearStatusMsg:
 		if msg.id == m.statusID {
 			m.status = statusMsg{}

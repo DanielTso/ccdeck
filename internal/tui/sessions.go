@@ -637,7 +637,7 @@ func (v *sessionsView) previewChanged() tea.Cmd {
 		return v.loadEntries(id)
 	}
 	seq := v.loadSeq
-	return tea.Tick(v.env.previewDelay, func(time.Time) tea.Msg { return previewDueMsg{seq} })
+	return v.env.wait(tea.Tick(v.env.previewDelay, func(time.Time) tea.Msg { return previewDueMsg{seq} }))
 }
 
 func (v *sessionsView) loadEntries(id string) tea.Cmd {

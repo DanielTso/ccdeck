@@ -98,7 +98,7 @@ func (v *usageView) Update(msg tea.Msg) tea.Cmd {
 		v.rebuild()
 		if v.visible && !v.due && !v.loading {
 			v.due = true
-			return tea.Tick(dailyEvery, func(time.Time) tea.Msg { return dailyDueMsg{} })
+			return v.env.wait(tea.Tick(dailyEvery, func(time.Time) tea.Msg { return dailyDueMsg{} }))
 		}
 	case dailyDueMsg:
 		v.due = false

@@ -279,8 +279,15 @@ func TestStoreEventsRefresh(t *testing.T) {
 		t.Fatal("snapshot not refreshed after a store event")
 	}
 	_ = h.store.Close()
-	if _, ok := h.m.waitForEvent()().(storeClosedMsg); !ok {
-		t.Fatal("closed store should end the stream")
+	// Events still queued come first; then the stream ends.
+	for i := 0; ; i++ {
+		msg := h.m.waitForEvent()()
+		if _, ok := msg.(storeClosedMsg); ok {
+			break
+		}
+		if _, ok := msg.(storeEventMsg); !ok || i == 100 {
+			t.Fatalf("got %T after Close: a closed store should end the stream", msg)
+		}
 	}
 }
 

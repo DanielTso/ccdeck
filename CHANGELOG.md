@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-19
+
+### Fixed
+
+- A subagent whose session directory appeared with the subagent already written in it (the whole
+  `<session>/subagents/...` tree created before ccdeck had watched the new directory, as on a busy machine) was
+  not shown until the next sweep, up to 30 seconds later. A session directory moved away with its subagents
+  likewise left them listed until the sweep. Both now show at once.
+
 ## [0.1.1] - 2026-11-19
 
 ### Fixed

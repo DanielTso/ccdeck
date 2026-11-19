@@ -100,9 +100,12 @@ func (p Paths) Transcripts() ([]TranscriptFile, error) {
 }
 
 // SessionOf maps a path under ProjectsDir to the session it belongs to: a
-// transcript projects/<slug>/<id>.jsonl, or anything under
-// projects/<slug>/<id>/ such as a subagent transcript. ok is false for any
-// other path.
+// transcript projects/<slug>/<id>.jsonl, the session's directory
+// projects/<slug>/<id>, or anything under it such as a subagent transcript.
+// The directory counts because it can appear with its subagents already in
+// it, or be moved away with them, and then it is the only path that tells.
+// ok is false for any other path, such as a file in the project directory
+// that is not a transcript.
 func (p Paths) SessionOf(path string) (id string, ok bool) {
 	rel, err := filepath.Rel(p.ProjectsDir(), path)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
@@ -112,6 +115,8 @@ func (p Paths) SessionOf(path string) (id string, ok bool) {
 	switch {
 	case len(parts) == 2 && strings.HasSuffix(parts[1], ".jsonl"):
 		id = strings.TrimSuffix(parts[1], ".jsonl")
+	case len(parts) == 2 && filepath.Ext(parts[1]) == "":
+		id = parts[1] // a session id has no extension; a file name usually does
 	case len(parts) > 2:
 		id = parts[1]
 	}

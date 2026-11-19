@@ -85,6 +85,11 @@ type tuning struct {
 	workers  int           // start-up parsers
 	entries  int           // conversations kept for Entries
 	noWatch  bool          // poll and sweep only, as when fsnotify is unavailable
+
+	// beforeEvent, when set, is called on the watching goroutine with each
+	// file event before it is handled. Tests use it to hold an event back,
+	// as a busy machine does, while the file system moves on.
+	beforeEvent func(fsnotify.Event)
 }
 
 // followedMax is how many conversations Entries keeps incremental: the

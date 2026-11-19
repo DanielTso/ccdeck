@@ -63,6 +63,9 @@ func (s *Store) watch() {
 			if !ok {
 				return
 			}
+			if s.tn.beforeEvent != nil {
+				s.tn.beforeEvent(ev)
+			}
 			if s.onEvent(ev) {
 				arm()
 			}
@@ -87,7 +90,11 @@ func (s *Store) watch() {
 
 // onEvent records the work one event calls for and reports whether there
 // is any. New directories are watched at once and their contents queued,
-// because files created before the watch was added send no events.
+// because files created before the watch was added send no events. A
+// directory under a project belongs to a session (SessionOf), even the
+// session's own directory, whose whole subagents tree may be written by the
+// time its event is handled; refreshing the session then lists the tree,
+// after the watches were added, so nothing falls between the two.
 func (s *Store) onEvent(ev fsnotify.Event) bool {
 	name := filepath.Clean(ev.Name)
 	projects, sessions := s.paths.ProjectsDir(), s.paths.SessionsDir()

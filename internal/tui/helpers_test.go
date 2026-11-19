@@ -92,6 +92,7 @@ func newHarnessOn(t testing.TB, store core.Store, w, h int, mod ...func(*Options
 		t.Fatal(err)
 	}
 	m.env.previewDelay = 0
+	m.env.waiting = func(tea.Cmd) tea.Cmd { return func() tea.Msg { return waitingMsg{} } }
 	hs := &harness{t: t, m: m, l: l}
 	for _, v := range m.views {
 		hs.run(v.Init())
@@ -125,8 +126,15 @@ func (h *harness) typeText(s string) {
 	}
 }
 
-// run executes a command and feeds back what it produces. Commands that
-// block (timers, the store subscription) are abandoned after a moment.
+// waitingMsg stands for a command that waits for a timer or for the store
+// (env.wait): the harness does not run it, and tests that need its message
+// send it themselves.
+type waitingMsg struct{}
+
+// run executes a command and feeds back what it produces. Every command
+// that does work is waited for, however slow the machine; one that waits
+// for a timer or the store is marked as such and returns a waitingMsg at
+// once.
 func (h *harness) run(cmd tea.Cmd) {
 	h.t.Helper()
 	if cmd == nil {
@@ -137,11 +145,11 @@ func (h *harness) run(cmd tea.Cmd) {
 	var msg tea.Msg
 	select {
 	case msg = <-done:
-	case <-time.After(50 * time.Millisecond):
-		return
+	case <-time.After(time.Minute):
+		h.t.Fatal("a command did not finish: one that waits for a timer or the store must go through env.wait")
 	}
 	switch msg := msg.(type) {
-	case nil:
+	case nil, waitingMsg:
 	case tea.BatchMsg:
 		for _, c := range msg {
 			h.run(c)
