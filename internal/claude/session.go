@@ -106,7 +106,12 @@ func (a *Accumulator) Session(in SessionInput) core.Session {
 	}
 	s.Title = orElse(a.text.customTitle, orElse(a.text.aiTitle, orElse(regName, a.text.firstPrompt)))
 
-	s.ContextWindow = in.Catalog.Window(s.Model)
+	if s.ContextTokens > 0 {
+		// Without a context (no reply yet, or a compaction since the last
+		// one) the window is left unknown too, so the context shows as
+		// unknown rather than as 0%.
+		s.ContextWindow = in.Catalog.Window(s.Model)
+	}
 	switch {
 	case st.ReportedCost > 0 && !st.ReportedStale:
 		s.CostUSD, s.CostKind = st.ReportedCost, core.CostReported

@@ -472,7 +472,8 @@ feeding.
 Use the full path to `ccdeck` if it is not on the `PATH` Claude Code runs with. `refreshInterval` (seconds) keeps
 the figures current while a session is idle; without it Claude Code runs the command only when something happens.
 The line it prints looks like `Opus · ctx 42% · $1.23 · 5h 84%! resets in 1h12m`: model, context, cost and the
-tightest rate-limit window. It is fitted to the width Claude Code gives it, and a window or context at 80% or more
+tightest rate-limit window. It is fitted to the width Claude Code gives it (the terminal width less the padding Claude
+Code draws around it), and a window or context at 80% or more
 is marked with `!` (and red, unless `NO_COLOR` is set).
 
 **Keeping your own status line.** If you already have one, wrap it, and its output is printed instead of ccdeck's:
@@ -534,7 +535,9 @@ are part of output.
 message (subagents do not count), or Claude Code's own figure when the
 [status-line meter](#status-line-meter-opt-in) reported it since that message. The percentage is against the model's window from Claude Code's model catalog
 (`cache/model-catalog/*.json`), matched by exact model id, then by prefix. An unknown model has no window, so you
-see the token count without a percentage. The gauge stops at 100%.
+see the token count without a percentage. The gauge stops at 100%. After `/compact` (or an automatic compaction)
+the context is unknown until the next reply, and shows as `—`: the figure from before the compaction is gone, and
+Claude Code itself reports none until its next request.
 
 **Cost.** In order:
 

@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-19
+
+### Fixed
+
+Found by running against a real Claude Code 2.1.328 session.
+
+- The status line was fitted to `COLUMNS`, but Claude Code draws it with two cells of padding on each side and cuts
+  what does not fit, so a line that just fitted lost its end. It is now fitted to `COLUMNS - 4`.
+- After a compaction the dashboard showed the context from before it (from the transcript), or 0% (from the
+  status-line meter, which Claude Code feeds a used percentage of 0 with no tokens until its next request). The
+  context is now unknown, shown as `—`, until the next reply, and the status line leaves it out. `ccdeck show`
+  prints an unknown context as `-` instead of `0 (window unknown)`.
+
+### Changed
+
+- The index cache format changed (accumulator state version 4); the first start after upgrading reads every
+  transcript again.
+
 ## [0.1.0] - 2026-11-19
 
 First version.

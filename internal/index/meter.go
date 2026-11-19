@@ -138,8 +138,8 @@ func (s *Store) cleanMeters(now time.Time) {
 // applyMeter lays a session's status-line report over the figures built
 // from its transcript. The report is always kept on Session.Meter; it
 // overrides only when it is at least as new as the latest main-thread
-// assistant message (contextAt), because otherwise the transcript has
-// moved on. Then the context comes from it when it has a context figure
+// assistant message or later compaction (contextAt), because otherwise the
+// transcript has moved on. Then the context comes from it when it has a context figure
 // and a window size, and the cost when it has one above zero, as
 // CostClaude. A cost Claude Code recorded at the end of the session
 // (CostReported) still wins.

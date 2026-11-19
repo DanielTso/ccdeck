@@ -100,13 +100,7 @@ func writeShow(w io.Writer, s core.Session, entries []core.Entry, now time.Time)
 	row("started", stamp(s.StartedAt))
 	row("active", stamp(s.LastActivity)+" ("+age(s.LastActivity, now)+")")
 	row("activity", fmt.Sprintf("%d turns, %d messages, %d tool calls", s.Turns, s.Messages, s.ToolCalls))
-	ctx := tokens(s.ContextTokens)
-	if p, ok := s.ContextPercent(); ok {
-		ctx = fmt.Sprintf("%s of %s (%.0f%%)", ctx, tokens(s.ContextWindow), p)
-	} else {
-		ctx += " (window unknown)"
-	}
-	row("context", ctx)
+	row("context", contextLong(s))
 	row("cost", costLong(s.CostUSD, s.CostKind))
 	if m := s.Meter; m != nil {
 		row("meter", meterSummary(*m, now))
@@ -166,4 +160,17 @@ func entryLine(e core.Entry) string {
 		t = e.Time.Local().Format("15:04")
 	}
 	return clip(t+" "+tag+"  "+clean(e.Text), 160)
+}
+
+// contextLong describes the context for show: "-" when it is unknown (no
+// reply yet, or a compaction since the last one).
+func contextLong(s core.Session) string {
+	if s.ContextTokens <= 0 {
+		return "-"
+	}
+	ctx := tokens(s.ContextTokens)
+	if p, ok := s.ContextPercent(); ok {
+		return fmt.Sprintf("%s of %s (%.0f%%)", ctx, tokens(s.ContextWindow), p)
+	}
+	return ctx + " (window unknown)"
 }

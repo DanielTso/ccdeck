@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -447,5 +448,50 @@ func TestContextAt(t *testing.T) {
 	}
 	if !st.ContextAt.Equal(want) {
 		t.Errorf("ContextAt after a JSON round trip = %v, want %v", st.ContextAt, want)
+	}
+}
+
+// After a compaction the context of the last reply is gone, and Claude Code
+// knows the new one only from the next API response: seen with Claude Code
+// 2.1.328, a 63.7k context became 64.4k at the next reply, while the
+// boundary's postTokens said 20.9k. So from a main-thread compact_boundary
+// until the next reply the context is unknown (0), and ContextAt is the
+// boundary, so that only a status-line report written after it counts.
+func TestCompactionForgetsContext(t *testing.T) {
+	asst := func(ts, id string, side bool, in int) string {
+		return line(`"type":"assistant"`, `"timestamp":"`+ts+`"`, `"isSidechain":`+map[bool]string{true: "true", false: "false"}[side],
+			`"message":{"id":"`+id+`","model":"claude-test-1","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":`+strconv.Itoa(in)+`}}`)
+	}
+	boundary := func(ts string, side bool) string {
+		return line(`"type":"system"`, `"subtype":"compact_boundary"`, `"timestamp":"`+ts+`"`,
+			`"isSidechain":`+map[bool]string{true: "true", false: "false"}[side],
+			`"compactMetadata":{"trigger":"manual","preTokens":63670,"postTokens":20927}`)
+	}
+	reply := asst("2026-01-10T10:00:00.000Z", "m1", false, 63666)
+
+	acc := foldLines(reply, boundary("2026-01-10T10:04:00.000Z", false))
+	if st := acc.State(); st.ContextTokens != 0 {
+		t.Errorf("after a compaction: context = %d, want 0 (unknown until the next reply)", st.ContextTokens)
+	}
+	if got, want := acc.ContextAt(), at(t, "2026-01-10T10:04:00.000Z"); !got.Equal(want) {
+		t.Errorf("after a compaction: ContextAt = %v, want the boundary %v", got, want)
+	}
+	// An unknown context is shown as unknown, not as 0% of a known window.
+	cat := Catalog{"claude-test-1": 1_000_000}
+	if p, ok := acc.Session(SessionInput{ID: "s", Catalog: cat}).ContextPercent(); ok {
+		t.Errorf("after a compaction: ContextPercent = %v, true; want unknown", p)
+	}
+	if p, ok := foldLines(reply).Session(SessionInput{ID: "s", Catalog: cat}).ContextPercent(); !ok || p == 0 {
+		t.Errorf("before the compaction: ContextPercent = %v, %v; want the reply's", p, ok)
+	}
+
+	acc = foldLines(reply, boundary("2026-01-10T10:04:00.000Z", false), asst("2026-01-10T10:05:00.000Z", "m2", false, 64376))
+	if st := acc.State(); st.ContextTokens != 64376 {
+		t.Errorf("reply after a compaction: context = %d, want 64376", st.ContextTokens)
+	}
+
+	acc = foldLines(reply, boundary("2026-01-10T10:04:00.000Z", true))
+	if st := acc.State(); st.ContextTokens != 63666 {
+		t.Errorf("sidechain compaction: context = %d, want 63666 (the main thread's)", st.ContextTokens)
 	}
 }

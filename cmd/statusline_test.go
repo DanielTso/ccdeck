@@ -462,8 +462,38 @@ func TestFormatLine(t *testing.T) {
 		!useColor(func(k string) string { return map[string]string{"TERM": "xterm-256color"}[k] }) {
 		t.Error("useColor does not follow NO_COLOR and TERM")
 	}
-	if columns(func(string) string { return "80" }) != 80 || columns(func(string) string { return "x" }) != 0 {
-		t.Error("columns does not read COLUMNS")
+	if columns(func(string) string { return "x" }) != 0 || columns(func(string) string { return "" }) != 0 {
+		t.Error("columns limits the width without a usable COLUMNS")
+	}
+}
+
+// Claude Code 2.1.328 sets COLUMNS to the terminal width but draws the
+// status line with two cells of padding on each side, cutting what does
+// not fit with "…": at COLUMNS=54 a 51-cell line lost its last characters.
+// So the line is fitted to COLUMNS minus that padding.
+func TestColumnsLeavesClaudeCodesPadding(t *testing.T) {
+	for _, tt := range []struct {
+		env  string
+		want int
+	}{{"80", 76}, {"55", 51}, {"54", 50}, {"5", 1}, {"4", 1}, {"1", 1}} {
+		if got := columns(func(string) string { return tt.env }); got != tt.want {
+			t.Errorf("COLUMNS=%s: columns = %d, want %d", tt.env, got, tt.want)
+		}
+	}
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	in := meter.Input{
+		Report: meter.Report{
+			Meter:  core.Meter{HasContext: true, ContextPercent: 6, CostUSD: 0.01},
+			Limits: []core.RateLimit{{Window: "7d", UsedPercent: 65, ResetsAt: now.Add(141 * time.Hour)}},
+		},
+		ModelName: "Haiku 5.5", HasCost: true,
+	}
+	full := "Haiku 5.5 · ctx 6% · $0.01 · 7d 65% resets in 5d21h" // 51 cells
+	if got := formatLine(in, now, columns(func(string) string { return "55" }), false); got != full {
+		t.Errorf("COLUMNS=55: line = %q, want %q", got, full)
+	}
+	if got, want := formatLine(in, now, columns(func(string) string { return "54" }), false), "Haiku 5.5 · ctx 6% · $0.01 · 7d 65%"; got != want {
+		t.Errorf("COLUMNS=54: line = %q, want %q", got, want)
 	}
 }
 

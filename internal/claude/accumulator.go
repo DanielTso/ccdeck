@@ -17,8 +17,8 @@ import (
 // StateVersion is the version of the State encoding. RestoreAccumulator
 // rejects a State written with another version. Version 2 added ContextAt;
 // version 3 files usage of the fast and long-prompt tiers under tier keys
-// (see usageKey).
-const StateVersion = 3
+// (see usageKey); version 4 forgets the context at a compaction.
+const StateVersion = 4
 
 // noLine marks a TextOffsets field with no line behind it.
 const noLine = -1
@@ -60,7 +60,9 @@ type State struct {
 	Usage         map[string]core.Usage `json:"usage"` // by usage key: model id plus tier suffix
 	ContextTokens int64                 `json:"contextTokens"`
 	// ContextAt is the time of the latest main-thread assistant line, the
-	// one ContextTokens describes; zero when no such line had a timestamp.
+	// one ContextTokens describes, or of a later main-thread compaction,
+	// after which ContextTokens is 0 (unknown) until the next reply; zero
+	// when no such line had a timestamp.
 	ContextAt time.Time `json:"contextAt"`
 
 	// ReportedCost is the last cost-state total. ReportedStale is set when an
@@ -138,9 +140,10 @@ func (a *Accumulator) Reset() {
 	a.text = texts{}
 }
 
-// ContextAt is the time of the latest main-thread assistant line, zero when
-// there is none with a timestamp. A status-line report at least this new
-// describes the conversation as it is now.
+// ContextAt is the time of the latest main-thread assistant line, or of a
+// later main-thread compaction; zero when there is none with a timestamp. A
+// status-line report at least this new describes the conversation as it is
+// now.
 func (a *Accumulator) ContextAt() time.Time { return a.st.ContextAt }
 
 // State returns a copy of the accumulator's serialisable state.
@@ -333,6 +336,12 @@ func (a *Accumulator) conversation(l *wireLine, offset int64) {
 		}
 	case "assistant":
 		a.assistant(l, t, main)
+	case "system":
+		if main && l.Subtype == "compact_boundary" && !t.Before(st.ContextAt) {
+			// The context of the last reply is gone, and the new one is
+			// known only from the next reply: until then it is unknown.
+			st.ContextTokens, st.ContextAt = 0, t
+		}
 	}
 }
 

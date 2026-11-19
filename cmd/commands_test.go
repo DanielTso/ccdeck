@@ -487,3 +487,20 @@ func TestDoctorUnpricedTier(t *testing.T) {
 		t.Errorf("doctor without tiered usage:\n%s", out)
 	}
 }
+
+// An unknown context (no reply yet, or a compaction since the last reply)
+// is shown as unknown by show, not as "0 (window unknown)".
+func TestContextLong(t *testing.T) {
+	for _, tt := range []struct {
+		s    core.Session
+		want string
+	}{
+		{core.Session{}, "-"},
+		{core.Session{ContextTokens: 64_376, ContextWindow: 1_000_000}, "64.4k of 1M (6%)"},
+		{core.Session{ContextTokens: 64_376}, "64.4k (window unknown)"},
+	} {
+		if got := contextLong(tt.s); got != tt.want {
+			t.Errorf("contextLong(%d of %d) = %q, want %q", tt.s.ContextTokens, tt.s.ContextWindow, got, tt.want)
+		}
+	}
+}

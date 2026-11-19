@@ -163,14 +163,17 @@ func Decode(data []byte, now time.Time) (Input, error) {
 	m := &in.Meter
 	m.At = now
 	cw := w.ContextWindow
-	if p, ok := number(cw.UsedPercentage, 0, 100); ok {
-		m.ContextPercent, m.HasContext = p, true
-	}
 	if n, ok := number(cw.Size, 0, 1e9); ok {
 		m.ContextWindow = int64(n)
 	}
 	if n, ok := number(cw.TotalInputTokens, 0, 1e10); ok {
 		m.ContextTokens = int64(n)
+	}
+	// Claude Code reports a used percentage of 0 with no tokens, not null,
+	// after a compaction until the next API response. A context is never
+	// empty, so that is no figure.
+	if p, ok := number(cw.UsedPercentage, 0, 100); ok && (p > 0 || m.ContextTokens > 0) {
+		m.ContextPercent, m.HasContext = p, true
 	}
 	if c, ok := number(w.Cost.TotalCostUSD, 0, 1e7); ok {
 		m.CostUSD, in.HasCost = c, true

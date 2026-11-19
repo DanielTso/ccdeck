@@ -96,6 +96,21 @@ func TestDecodeTolerance(t *testing.T) {
 					t.Errorf("%+v", in)
 				}
 			}},
+		// The shape Claude Code 2.1.328 sends after /compact until the next
+		// API response: 0, not null, with every token count 0. No context
+		// is ever empty, so this is no figure, not an empty window.
+		{"zero after a compaction is no figure", `{"session_id":"` + id + `","context_window":{"total_input_tokens":0,"total_output_tokens":0,"context_window_size":1000000,"current_usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"used_percentage":0,"remaining_percentage":100}}`,
+			func(t *testing.T, in Input) {
+				if in.Meter.HasContext || in.Meter.ContextWindow != 1_000_000 {
+					t.Errorf("%+v", in.Meter)
+				}
+			}},
+		{"zero percent of a large window is a figure", `{"context_window":{"total_input_tokens":3000,"context_window_size":1000000,"used_percentage":0}}`,
+			func(t *testing.T, in Input) {
+				if !in.Meter.HasContext || in.Meter.ContextPercent != 0 || in.Meter.ContextTokens != 3000 {
+					t.Errorf("%+v", in.Meter)
+				}
+			}},
 		{"wrong types are skipped, the rest kept", `{"session_id":42,"model":"opus","cost":{"total_cost_usd":"lots","total_lines_added":3},"context_window":{"used_percentage":50},"rate_limits":[1,2]}`,
 			func(t *testing.T, in Input) {
 				if in.SessionID != "" || in.HasCost || in.Meter.LinesAdded != 3 || !in.Meter.HasContext || in.Meter.ContextPercent != 50 {

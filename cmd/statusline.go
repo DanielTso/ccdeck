@@ -224,13 +224,19 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	return c.b.Write(p)
 }
 
-// columns is the width Claude Code gives the status line; 0 for no limit.
+// statusPadding is the padding Claude Code draws on each side of the
+// status line (observed with 2.1.328). COLUMNS is the terminal width, and
+// a line wider than what the padding leaves is cut with "…".
+const statusPadding = 2
+
+// columns is the width Claude Code gives the status line: COLUMNS less the
+// padding on both sides, at least 1; 0 for no limit.
 func columns(getenv func(string) string) int {
 	n, err := strconv.Atoi(strings.TrimSpace(getenv("COLUMNS")))
 	if err != nil || n <= 0 {
 		return 0
 	}
-	return n
+	return max(n-2*statusPadding, 1)
 }
 
 // useColor reports whether the line may carry colour. Claude Code captures

@@ -136,8 +136,8 @@ Lines have a top-level `type`:
 | `ai-title` | `aiTitle`. Re-appended every turn: the last one wins. |
 | `custom-title` | `customTitle`. Beats `aiTitle`. (Seen in the binary, not in data.) |
 | `last-prompt` | `lastPrompt`. Last one wins. |
-| `cost-state` | Written when a session ends: `totalCostUSD`, `modelUsage{<model>:{inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, costUSD,…}}`. Often 0 on subscription plans. Only `totalCostUSD` is read. |
-| `system` | `subtype` `turn_duration` (`durationMs`), `local_command`, `compact_boundary` (`compactMetadata.preTokens`; seen in the binary, not in data). Only `compact_boundary` is used: it becomes a "compacted" entry. |
+| `cost-state` | Written when a session ends: `totalCostUSD`, `modelUsage{<model>:{inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, costUSD,…}}`. Often 0 on subscription plans (on the subscription checked with 2.1.328 it held the same total as the status line). A resumed process carries it on. Only `totalCostUSD` is read. |
+| `system` | `subtype` `turn_duration` (`durationMs`), `local_command`, `compact_boundary` (`compactMetadata.{trigger, preTokens, postTokens}`). Only `compact_boundary` is used: it becomes a "compacted" entry, and on the main thread it makes the context unknown until the next reply (see below). `postTokens` is not the next context: 20.9k was recorded for a conversation whose next request had 64.4k. |
 | everything else | Ignore. In particular the plumbing types listed under "Hard rules". |
 
 Common fields on `user`, `assistant` and `system` lines: `uuid`, `parentUuid`,
@@ -161,7 +161,15 @@ final usage. Summing per line triples the numbers. A later line of the message
 replaces the earlier line's usage, so the message is counted once.
 
 **Context tokens** = `input_tokens + cache_read_input_tokens +
-cache_creation_input_tokens` of the latest main-thread assistant message.
+cache_creation_input_tokens` of the latest main-thread assistant message. A
+main-thread `compact_boundary` after that message makes the context unknown
+(0, and no window, so it is shown as `—`, not 0%) until the next reply.
+
+**Forks.** `--fork-session` starts a new transcript that repeats some of the
+parent's lines under the new `sessionId`. A repeated assistant line keeps the
+parent's `message.id`, has `requestSessionId` set to the parent's id, and has
+its usage zeroed, so nothing is counted twice. The fork's transcript is
+written only with its first prompt.
 
 ### `projects/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl`
 
@@ -215,7 +223,12 @@ A live session may have no transcript yet (nothing typed): still list it.
 
 In order: (1) `cost-state.totalCostUSD` when it is above zero and no assistant
 message follows it → `CostReported`. The total covers the session as it ended:
-once the session is resumed and answers again, the figure is estimated again;
+once the session is resumed and answers again, the figure is estimated again.
+Checked with Claude Code 2.1.328: a resumed process starts from the recorded
+total (its status-line `cost.total_cost_usd` continues from it), so both
+figures cover the whole session, not the current process. Claude Code's total
+also includes requests the transcript does not record (title generation, the
+compaction summary), so the estimate from the transcript is a little lower;
 (2) with the status-line meter on, Claude Code's own figure from a report at
 least as new as the latest reply → `CostClaude`; (3) tokens × prices →
 `CostEstimated`, where prices come from `[prices]` in the config file, then
@@ -533,7 +546,11 @@ when no live session is being fed or the helper has never run.
 `session_id`, `model.id`, `model.display_name` (for the printed line only),
 `cost.{total_cost_usd,total_lines_added,total_lines_removed}`,
 `context_window.{context_window_size,used_percentage,total_input_tokens}`
-(`used_percentage` may be null early on and after a compaction),
+(`used_percentage` is null before the first API response of a process, and 0
+with every token count 0 after a compaction until the next response; both
+mean no figure. With Claude Code 2.1.328 `total_input_tokens` is the latest
+request's input plus cache reads and writes, the same figure as the
+transcript's context, not a session total),
 `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` and
 `rate_limits.spend_limit.{used_percentage,resets_at,used_usd,limit_usd,period}`
 (`resets_at` is epoch seconds; each window may be absent). Numbers are clamped
@@ -550,7 +567,8 @@ name.
   window with its reset time; a window or context at 80% or more gets a `!`.
   Claude Code captures the output, so stdout is never a terminal: the line is
   coloured unless `NO_COLOR` is set or `TERM` is `dumb`. Claude Code sets
-  `COLUMNS`, so fit it.
+  `COLUMNS` to the terminal width but draws the line with two cells of padding
+  on each side and cuts what does not fit with `…`, so fit it to `COLUMNS - 4`.
 - `--wrap '<command>'` runs the user's existing status-line command (`sh -c`,
   the same stdin and environment, its stderr discarded) and prints its output
   instead of ccdeck's, so enabling the meter does not cost them their status
@@ -627,7 +645,7 @@ predates this and is kept, core being frozen.
 
 **How the index uses it.** Watch the meter directory like the registry. When a
 session has a meter report at least as new as its latest main-thread assistant
-message, the report wins: `ContextTokens` and `ContextWindow` come from it when
+message (or a later compaction), the report wins: `ContextTokens` and `ContextWindow` come from it when
 it has a context figure and a window size, and `CostUSD` with `CostKind =
 CostClaude` when its cost is above zero. An older report is kept on
 `Session.Meter` for display (`ccdeck show` prints it; the TUI does not) but
