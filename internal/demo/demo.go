@@ -167,6 +167,7 @@ func (st *Store) Daily(days int) []core.DayUsage {
 		d := core.DayUsage{Date: date, Usage: map[string]core.Usage{}}
 		if have, ok := st.days[dayKey(date)]; ok {
 			d.CostUSD, d.Sessions = have.CostUSD, have.Sessions
+			d.SessionIDs = slices.Sorted(slices.Values(have.SessionIDs))
 			for m, u := range have.Usage {
 				d.Usage[m] = u
 			}

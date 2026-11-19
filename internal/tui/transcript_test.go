@@ -308,3 +308,57 @@ func BenchmarkUsageView500(b *testing.B) {
 		_ = h.m.View()
 	}
 }
+
+// Expanding a tool call keeps its first line where it was on screen, even
+// while the transcript follows the newest line.
+func TestTranscriptExpandKeepsTheItemInPlace(t *testing.T) {
+	h := newHarness(t, 100, 12)
+	tv := h.openTranscript("rate limiter")
+	if !tv.follow || tv.offset == 0 {
+		t.Fatalf("the transcript should open following, scrolled: follow %v offset %d", tv.follow, tv.offset)
+	}
+	first, _ := tv.visibleItems()
+	for i := first; i < len(tv.items); i++ {
+		if tv.items[i].fold && tv.items[i].result >= 0 {
+			tv.sel = i
+			break
+		}
+	}
+	if tv.sel < 0 {
+		t.Fatal("no fold on screen")
+	}
+	row := tv.starts[tv.sel] - tv.offset
+	h.keys("enter")
+	if !tv.items[tv.sel].expanded {
+		t.Fatal("enter did not expand")
+	}
+	if got := tv.starts[tv.sel] - tv.offset; got != row {
+		t.Errorf("the expanded item's header moved from row %d to %d", row, got)
+	}
+}
+
+// Find unfolds the current match only: folds it opened for earlier
+// matches while typing close again.
+func TestTranscriptFindRefoldsWhatItOpened(t *testing.T) {
+	h := newHarness(t, 120, 35)
+	tv := h.openTranscript("rate limiter")
+	h.keys("/")
+	h.typeText("tenant")
+	h.keys("enter")
+	cur := tv.matches[tv.match]
+	for i, it := range tv.items {
+		if it.expanded && i != cur {
+			t.Errorf("item %d stays expanded although the current match is %d", i, cur)
+		}
+	}
+	h.keys("n")
+	if next := tv.matches[tv.match]; next != cur && tv.items[cur].expanded {
+		t.Error("moving on left the previous match expanded")
+	}
+	h.keys("esc")
+	for i, it := range tv.items {
+		if it.expanded {
+			t.Errorf("item %d stays expanded after the find was cleared", i)
+		}
+	}
+}

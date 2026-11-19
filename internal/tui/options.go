@@ -28,6 +28,11 @@ type Options struct {
 	Keys map[string][]string
 	// Now is the clock used for relative times. Nil means time.Now.
 	Now func() time.Time
+	// Ready is closed when the store's start-up scan is complete. Until
+	// then the lists keep their top row selected as sessions arrive; after
+	// it the selection stays on its session. Nil means the store is
+	// complete from the start.
+	Ready <-chan struct{}
 }
 
 // Layout holds layout preferences. Zero values mean defaults.
@@ -56,6 +61,23 @@ const (
 	defaultPreviewRatio = 0.55
 	defaultLivePanes    = 4
 )
+
+// OptionError is a rejected option value. Key names the option the way the
+// config file spells it ("theme", "themes.<name>", "themes.<name>.base",
+// "themes.<name>.<token>", "keys.<action>"), so the caller can say where the
+// value came from.
+type OptionError struct {
+	Key string
+	Err error
+}
+
+func (e *OptionError) Error() string { return "tui: " + e.Err.Error() }
+
+func (e *OptionError) Unwrap() error { return e.Err }
+
+func optionErr(key string, format string, args ...any) error {
+	return &OptionError{Key: key, Err: fmt.Errorf(format, args...)}
+}
 
 func (o Options) validate() error {
 	if o.Store == nil {

@@ -126,7 +126,7 @@ func resolveThemes(custom map[string]ThemeSpec) ([]theme, error) {
 	all := slices.Clone(builtins)
 	for _, name := range slices.Sorted(maps.Keys(custom)) {
 		if _, clash := builtin(name); clash {
-			return nil, fmt.Errorf("tui: custom theme %q has the name of a built-in theme", name)
+			return nil, optionErr("themes."+name, "custom theme %q has the name of a built-in theme", name)
 		}
 		t, err := customTheme(name, custom[name])
 		if err != nil {
@@ -144,7 +144,7 @@ func customTheme(name string, spec ThemeSpec) (theme, error) {
 	}
 	t, ok := builtin(base)
 	if !ok {
-		return theme{}, fmt.Errorf("tui: theme %q: base %q is not a built-in theme (have %s)",
+		return theme{}, optionErr("themes."+name+".base", "theme %q: base %q is not a built-in theme (have %s)",
 			name, base, strings.Join(BuiltinThemes(), ", "))
 	}
 	t.name = name
@@ -152,12 +152,12 @@ func customTheme(name string, spec ThemeSpec) (theme, error) {
 	for _, tok := range slices.Sorted(maps.Keys(spec.Colors)) {
 		field, ok := tokens[tok]
 		if !ok {
-			return theme{}, fmt.Errorf("tui: theme %q: unknown colour token %q (have %s)",
+			return theme{}, optionErr("themes."+name+"."+tok, "theme %q: unknown colour token %q (have %s)",
 				name, tok, strings.Join(ThemeTokens(), ", "))
 		}
 		col, err := parseColor(spec.Colors[tok])
 		if err != nil {
-			return theme{}, fmt.Errorf("tui: theme %q: %s: %w", name, tok, err)
+			return theme{}, &OptionError{Key: "themes." + name + "." + tok, Err: fmt.Errorf("theme %q: %s: %w", name, tok, err)}
 		}
 		*field = col
 	}

@@ -2,10 +2,12 @@ package index
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -273,7 +275,11 @@ func TestCacheInvalidation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		data = []byte(strings.Replace(string(data), `"version":1`, `"version":0`, 1))
+		current := fmt.Sprintf(`"version":%d`, cacheVersion)
+		if !strings.Contains(string(data), current) {
+			t.Fatalf("cache lacks %s", current)
+		}
+		data = []byte(strings.Replace(string(data), current, `"version":0`, 1))
 		if err := os.WriteFile(files[0], data, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -380,6 +386,13 @@ func TestDaily(t *testing.T) {
 	}
 	if u := days[2].Usage[model1]; days[2].Sessions != 2 || u.Input != 2010 || u.Output != 201 {
 		t.Errorf("today = %+v", days[2])
+	}
+	// The ids let a range of days count each session once.
+	if got := days[1].SessionIDs; !reflect.DeepEqual(got, []string{sessA}) {
+		t.Errorf("yesterday's sessions = %q", got)
+	}
+	if got, want := days[2].SessionIDs, []string{sessA, sessB}; !reflect.DeepEqual(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("today's sessions = %q", got)
 	}
 	if want := (2010*3.0 + 201*15.0) / 1e6; !near(days[2].CostUSD, want) {
 		t.Errorf("today cost = %v, want %v", days[2].CostUSD, want)
@@ -513,4 +526,201 @@ func TestRegistryHalfWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "a removed file to end the session", func() bool { return session(t, s, sessA).Live == nil })
+}
+
+// Following as many sessions as the UI can show at once (sixteen Live
+// panes, the Sessions preview and an open transcript) must stay
+// incremental: no conversation is evicted and reread from the start.
+func TestEntriesCacheHoldsWhatTheUIFollows(t *testing.T) {
+	const followed = 16 + 2
+	e := newEnv(t)
+	now := time.Now()
+	ids := make([]string, followed)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("cccccccc-0000-4000-8000-%012d", i)
+		e.write(transcript("-home-user-widgets", ids[i]), userLine(t, now, "hello"))
+	}
+	s := e.openWith(func(tn *tuning) { tn.entries = defaultTuning().entries })
+	waitFor(t, "every session", func() bool { return len(s.Sessions()) == followed })
+	first := map[string]*conv{}
+	for range 2 {
+		for _, id := range ids {
+			if _, err := s.Entries(id, 40); err != nil {
+				t.Fatal(err)
+			}
+			s.conv.mu.Lock()
+			cv := s.conv.items[id]
+			s.conv.mu.Unlock()
+			if prev, ok := first[id]; ok && prev != cv {
+				t.Fatalf("the conversation of %s was evicted and reread", id)
+			}
+			first[id] = cv
+		}
+	}
+}
+
+// A transcript replaced by other content with the same line boundaries
+// (another writer: a restore from backup, a sync tool, an edit) is read
+// again from the start, at run time and after a warm restart.
+func TestReplacedTranscriptIsReadAgain(t *testing.T) {
+	ts := time.Now().Add(-time.Hour)
+	old := userLine(t, ts, "AAAA") + assistantLines(t, ts, "msg_1", 100, 100, "old answer")
+	same := userLine(t, ts, "BBBB") + assistantLines(t, ts, "msg_1", 300, 300, "new answer")
+	if len(old) != len(same) {
+		t.Fatal("fixtures must be the same size")
+	}
+	longer := same + assistantLines(t, ts, "msg_2", 1, 1, "more")
+	for _, tt := range []struct {
+		name    string
+		content string
+		input   int64
+		rename  bool
+	}{
+		{"same size, rewritten in place", same, 300, false},
+		{"same size, renamed over", same, 300, true},
+		{"longer, rewritten in place", longer, 301, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			rel := transcript("-home-user-widgets", sessA)
+			e.write(rel, old)
+			s := e.open()
+			if _, err := s.Entries(sessA, 0); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(20 * time.Millisecond) // a different mtime
+			if tt.rename {
+				e.write(rel, tt.content)
+			} else if err := os.WriteFile(e.path(rel), []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			check := func(s *Store, when string) {
+				t.Helper()
+				waitFor(t, when+": the new content", func() bool {
+					sum := session(t, s, sessA)
+					return sum.Title == "BBBB" && sum.TotalUsage().Input == tt.input
+				})
+				es, err := s.Entries(sessA, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, e := range es {
+					if e.Text == "AAAA" || e.Text == "old answer" {
+						t.Errorf("%s: entries still hold the old file: %+v", when, es)
+						break
+					}
+				}
+			}
+			check(s, "at run time")
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			check(e.open(), "after a warm restart")
+		})
+	}
+}
+
+// The same, when the replacement happens while nothing runs.
+func TestTranscriptReplacedBetweenRunsIsReadAgain(t *testing.T) {
+	ts := time.Now().Add(-time.Hour)
+	old := userLine(t, ts, "AAAA") + assistantLines(t, ts, "msg_1", 100, 100, "old answer")
+	longer := userLine(t, ts, "BBBB") + assistantLines(t, ts, "msg_1", 300, 300, "new answer") +
+		assistantLines(t, ts, "msg_2", 1, 1, "more")
+	e := newEnv(t)
+	rel := transcript("-home-user-widgets", sessA)
+	e.write(rel, old)
+	if err := e.open().Close(); err != nil {
+		t.Fatal(err)
+	}
+	e.write(rel, longer)
+	s := e.open()
+	if sum := session(t, s, sessA); sum.Title != "BBBB" || sum.TotalUsage().Input != 301 {
+		t.Errorf("title %q, input %d; want BBBB, 301", sum.Title, sum.TotalUsage().Input)
+	}
+}
+
+// A Claude directory that is missing or cannot be read is an error naming
+// it, not an empty store that looks like a machine with no sessions.
+func TestUnreadableClaudeDirIsAnError(t *testing.T) {
+	e := newEnv(t)
+	missing := filepath.Join(t.TempDir(), "typo")
+	notDir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	locked := t.TempDir()
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	cases := map[string]string{"missing": missing, "not a directory": notDir}
+	if _, err := os.ReadDir(locked); err != nil { // root reads anything
+		cases["unreadable"] = locked
+	}
+	for name, dir := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, err := newStore(Options{ClaudeDir: dir, CacheDir: e.cache}, tuning{procs: e.procs, debounce: time.Millisecond, poll: time.Hour, sweep: time.Hour, workers: 1, entries: 1})
+			if err == nil {
+				_ = s.Close()
+				t.Fatal("want an error")
+			}
+			if !errors.Is(err, ErrClaudeDir) || !strings.Contains(err.Error(), dir) {
+				t.Errorf("err = %v; want ErrClaudeDir naming %s", err, dir)
+			}
+		})
+	}
+	// A directory without projects/ yet is fine: nothing was recorded.
+	empty := t.TempDir()
+	s, err := newStore(Options{ClaudeDir: empty, CacheDir: e.cache}, tuning{procs: e.procs, debounce: time.Millisecond, poll: time.Hour, sweep: time.Hour, workers: 1, entries: 1})
+	if err != nil {
+		t.Fatalf("empty Claude directory: %v", err)
+	}
+	_ = s.Close()
+}
+
+// Close during the start-up scan returns without finishing the transcript
+// being parsed, and caches what was read, so the next start is not cold.
+func TestCloseDuringScanIsPromptAndCaches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes a large transcript")
+	}
+	e := newEnv(t)
+	ts := time.Now().Add(-time.Hour)
+	var big strings.Builder
+	pad := strings.Repeat("x", 900)
+	for i := range 10_000 {
+		big.WriteString(assistantLines(t, ts, fmt.Sprintf("msg_%d", i), 1, 1, pad))
+	}
+	e.write(transcript("-home-user-big", sessA), big.String())
+	small := make([]string, 5)
+	for i := range small {
+		small[i] = fmt.Sprintf("dddddddd-0000-4000-8000-%012d", i)
+		e.write(transcript("-home-user-small", small[i]), userLine(t, ts, "hello"))
+	}
+	tn := func(tn *tuning) { tn.workers = 2 }
+
+	// How long a full cold scan takes here.
+	start := time.Now()
+	full := e.openWith(tn)
+	_ = full.Close()
+	whole := time.Since(start)
+
+	e.cache = t.TempDir()
+	s, err := newStore(Options{ClaudeDir: e.dir, CacheDir: e.cache}, tuning{procs: e.procs, debounce: time.Millisecond, poll: time.Hour, sweep: time.Hour, workers: 2, entries: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the small sessions", func() bool { return len(s.Sessions()) >= len(small) })
+	start = time.Now()
+	_ = s.Close()
+	if took := time.Since(start); took > whole/2 && took > 250*time.Millisecond {
+		t.Errorf("Close took %v during a scan; a whole scan takes %v", took, whole)
+	}
+	warm := e.openWith(tn)
+	if st := warm.Stats(); st.Resumed < len(small) {
+		t.Errorf("Resumed = %d after an interrupted scan, want at least %d", st.Resumed, len(small))
+	}
+	if got := session(t, warm, sessA).Messages; got != 10_000 {
+		t.Errorf("big session has %d messages after resuming, want 10000", got)
+	}
 }

@@ -387,11 +387,8 @@ func (v *sessionsView) fork() tea.Cmd {
 	if s.Live != nil {
 		return status("%s is running%s; fork it once it has ended", quote(s.Title), where(s))
 	}
-	l, err := v.env.launcher.Resume(s, true)
-	if err != nil {
-		return statusErr(err)
-	}
-	return runLaunch(l, "Forked "+quote(s.Title))
+	l := v.env.launcher
+	return buildLaunch("Forked "+quote(s.Title), func() (core.Launch, error) { return l.Resume(s, true) })
 }
 
 func (v *sessionsView) newSession() tea.Cmd {
@@ -399,11 +396,8 @@ func (v *sessionsView) newSession() tea.Cmd {
 	if !ok || s.ProjectDir == "" {
 		return nil
 	}
-	l, err := v.env.launcher.New(s.ProjectDir)
-	if err != nil {
-		return statusErr(err)
-	}
-	return runLaunch(l, "New session in "+projectName(s.ProjectDir))
+	l, dir := v.env.launcher, s.ProjectDir
+	return buildLaunch("New session in "+projectName(dir), func() (core.Launch, error) { return l.New(dir) })
 }
 
 // Rows and selection.
@@ -455,8 +449,10 @@ func (v *sessionsView) rebuild() tea.Cmd {
 		}
 	}
 
-	// Sessions arrive one by one at start-up: until the user picks one,
-	// keep the top row selected rather than whichever arrived first.
+	// Sessions arrive one by one at start-up: until the scan is complete
+	// or the user picks one, keep the top row selected rather than
+	// whichever arrived first. After that the selection stays on its
+	// session, so a key acts on the session that was read.
 	i := v.selectable(0, 1)
 	if v.picked {
 		i = slices.IndexFunc(v.rows, func(r row) bool { return r.s != nil && r.s.ID == v.selID })
@@ -464,7 +460,11 @@ func (v *sessionsView) rebuild() tea.Cmd {
 			i = v.selectable(min(max(v.cursor, 0), len(v.rows)-1), 1)
 		}
 	}
-	return v.setCursor(i)
+	cmd := v.setCursor(i)
+	if v.env.ready && v.cursor >= 0 {
+		v.picked = true
+	}
+	return cmd
 }
 
 func (v *sessionsView) compare(a, b *core.Session) int {

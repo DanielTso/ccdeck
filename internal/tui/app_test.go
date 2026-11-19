@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 func TestKeyPressHelper(t *testing.T) {
@@ -307,5 +308,33 @@ func TestWindowTitleCountsWaiting(t *testing.T) {
 	h := newHarness(t, 80, 24)
 	if got := h.m.View().WindowTitle; got != "ccdeck · 1 waiting" {
 		t.Fatalf("title = %q", got)
+	}
+}
+
+// A terminal without colour, as with NO_COLOR, keeps its own default
+// colours: the theme does not repaint them.
+func TestNoColorLeavesTerminalColours(t *testing.T) {
+	h := newHarness(t, 120, 35)
+	h.send(tea.ColorProfileMsg{Profile: colorprofile.ASCII})
+	if v := h.m.View(); v.BackgroundColor != nil || v.ForegroundColor != nil {
+		t.Error("an ASCII profile still repaints the terminal's default colours")
+	}
+	h.send(tea.ColorProfileMsg{Profile: colorprofile.TrueColor})
+	if v := h.m.View(); v.BackgroundColor == nil || v.ForegroundColor == nil {
+		t.Error("a colour profile does not paint the theme colours")
+	}
+	t.Setenv("NO_COLOR", "1")
+	h = newHarness(t, 120, 35)
+	if v := h.m.View(); v.BackgroundColor != nil {
+		t.Error("NO_COLOR repaints the background before the profile arrives")
+	}
+}
+
+// The help overlay lists the Usage view's own binding.
+func TestHelpInUsageListsItsKeys(t *testing.T) {
+	h := newHarness(t, 120, 35)
+	h.keys("3", "?")
+	if v := h.view(); !strings.Contains(v, "resume, or focus if live") {
+		t.Errorf("help in Usage omits enter:\n%s", v)
 	}
 }

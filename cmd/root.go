@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -42,6 +43,21 @@ ones, and hands the terminal to claude when you want to resume one.`,
 	return root
 }
 
+// optionSource says where a value the UI rejected came from: --theme, or
+// the config file and the key in it, as the config package's own errors do.
+func optionSource(err error, cfg loadedConfig, flagTheme string) error {
+	var oe *tui.OptionError
+	switch {
+	case !errors.As(err, &oe):
+		return err
+	case oe.Key == "theme" && flagTheme != "":
+		return fmt.Errorf("--theme: %w", oe.Err)
+	case cfg.found:
+		return fmt.Errorf("config: %s: key %s: %w", cfg.path, oe.Key, oe.Err)
+	}
+	return err
+}
+
 // Execute runs the CLI.
 func Execute() error {
 	return NewRootCmd().Execute()
@@ -60,7 +76,8 @@ func runDashboard(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	m, err := tui.New(tuiOptions(cfg.Config, s.theme, st, newLauncher(cfg.Config)))
+	m, err := tui.New(tuiOptions(cfg.Config, s.theme, st, newLauncher(cfg.Config, s)))
+	err = optionSource(err, cfg, s.theme)
 	if err == nil {
 		_, err = tea.NewProgram(m, tea.WithContext(cmd.Context())).Run()
 	}

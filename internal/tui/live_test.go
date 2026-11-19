@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DanielTso/ccdeck/internal/core"
 )
@@ -296,8 +297,11 @@ func TestLiveWithoutLiveSessions(t *testing.T) {
 	h := newHarnessOn(t, f, 100, 30)
 	h.keys("2")
 	v := h.view()
-	if !strings.Contains(v, "No live session for this pane.") || !strings.Contains(v, "0 live") {
+	if !strings.Contains(v, "No live sessions") || !strings.Contains(v, "0 live") {
 		t.Fatalf("empty grid not explained:\n%s", v)
+	}
+	if strings.Count(v, "╭") != 0 || len(h.live().slots) != 0 {
+		t.Fatalf("with nothing live there should be one message, not empty panes:\n%s", v)
 	}
 	h.keys("enter", "z", "tab")
 	if len(h.l.Calls()) != 0 {
@@ -360,5 +364,88 @@ func TestLiveScrollKeys(t *testing.T) {
 	h.keys("end")
 	if lv.back[id] != 0 || strings.Contains(h.view(), "paused") {
 		t.Fatal("end did not return to following")
+	}
+}
+
+// A transient resize keeps the focused session on screen and focused, and
+// growing back restores every pane where it was.
+func TestLiveResizeKeepsFocusAndLayout(t *testing.T) {
+	h := newHarness(t, 140, 40)
+	h.keys("2", "tab", "tab")
+	lv := h.live()
+	start, focused := slices.Clone(lv.slots), lv.slots[2]
+	h.send(tea.WindowSizeMsg{Width: 40, Height: 10})
+	if len(lv.slots) != 1 || lv.slots[0] != focused || lv.focus != 0 {
+		t.Fatalf("small: slots %v focus %d, want only the focused %s", lv.slots, lv.focus, focused)
+	}
+	h.send(tea.WindowSizeMsg{Width: 140, Height: 40})
+	if !slices.Equal(lv.slots, start) || lv.focus != 2 {
+		t.Fatalf("grown back: slots %v focus %d, want %v focus 2", lv.slots, lv.focus, start)
+	}
+}
+
+// - drops a pane, never the focused session.
+func TestLiveFewerPanesKeepsFocus(t *testing.T) {
+	h := newHarness(t, 140, 40)
+	h.keys("2")
+	lv := h.live()
+	h.send(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}) // the last pane
+	focused := lv.slots[lv.focus]
+	h.keys("-")
+	if got, _ := lv.Selected(); got.ID != focused {
+		t.Fatalf("after -: focused %q, want %q (slots %v)", got.ID, focused, lv.slots)
+	}
+}
+
+// Scrolling a pane with the wheel focuses it, so end resumes following it.
+func TestLiveWheelFocusesThePane(t *testing.T) {
+	h := newHarness(t, 120, 35)
+	h.keys("2", "tab", "tab")
+	lv := h.live()
+	rs := lv.rects()
+	h.send(tea.MouseWheelMsg{X: rs[0].x + 5, Y: rs[0].y + 5, Button: tea.MouseWheelUp})
+	id := lv.slots[0]
+	if lv.focus != 0 || lv.back[id] == 0 {
+		t.Fatalf("focus %d back %d; the scrolled pane should be focused", lv.focus, lv.back[id])
+	}
+	h.keys("end")
+	if lv.back[id] != 0 {
+		t.Error("end did not resume following the scrolled pane")
+	}
+}
+
+// The grid has no more panes than sessions to show.
+func TestLiveNoEmptyPanes(t *testing.T) {
+	f := bigStore(6, 0)
+	for i := 1; i < 3; i++ {
+		f.sessions[i].Live = &core.Live{PID: 100 + i, Status: core.StatusIdle, StatusSince: testNow}
+	}
+	h := newHarnessOn(t, f, 140, 40)
+	h.keys("2")
+	if got := len(h.live().slots); got != 3 {
+		t.Fatalf("%d panes for 3 live sessions, want 3", got)
+	}
+	if strings.Contains(h.view(), "No live session for this pane") {
+		t.Error("an empty pane is drawn")
+	}
+}
+
+// Emoji built from joined code points (ZWJ sequences, skin tones,
+// variation selectors) measure differently by grapheme and by wcwidth.
+// The renderer uses wcwidth unless the terminal reports mode 2027, so text
+// is normalised until both agree and no row overflows.
+func TestLiveRowsFitWithJoinedEmoji(t *testing.T) {
+	f := bigStore(4, 0)
+	for i := range 2 {
+		f.sessions[i].Live = &core.Live{PID: 100 + i, Status: core.StatusBusy, StatusSince: testNow}
+		f.sessions[i].Title = "Add 👩‍💻 dev mode toggle 🌙 and ❤️ favorites ✨ for 👍🏽 people 🏳️‍🌈"
+	}
+	f.entries["s-0000"] = []core.Entry{{Kind: core.EntryPrompt, Text: "emoji test 👍🏽 please 👨‍👩‍👧"}}
+	h := newHarnessOn(t, f, 140, 40)
+	h.keys("2")
+	for i, l := range strings.Split(h.m.View().Content, "\n") {
+		if g, w := ansi.StringWidth(l), ansi.StringWidthWc(l); g != w || w > 140 {
+			t.Errorf("line %d: %d cells by grapheme, %d by wcwidth: %q", i, g, w, ansi.Strip(l))
+		}
 	}
 }

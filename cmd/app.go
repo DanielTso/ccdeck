@@ -2,13 +2,16 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/DanielTso/ccdeck/internal/claude"
 	"github.com/DanielTso/ccdeck/internal/config"
 	"github.com/DanielTso/ccdeck/internal/core"
 	"github.com/DanielTso/ccdeck/internal/demo"
@@ -89,11 +92,18 @@ func openStore(s settings, cfg config.Config, log *slog.Logger, animate bool) (s
 		}
 		return demoStore{demo.New(demo.Options{Seed: 1, Interval: every})}, nil
 	}
-	return index.New(index.Options{
+	st, err := index.New(index.Options{
 		ClaudeDir: s.claudeDir,
 		Prices:    indexPrices(cfg.Prices),
 		Logger:    log,
 	})
+	if err != nil {
+		if errors.Is(err, index.ErrClaudeDir) {
+			err = fmt.Errorf("%w\n(choose the directory with --claude-dir or CLAUDE_CONFIG_DIR; ccdeck doctor shows what it finds)", err)
+		}
+		return nil, err
+	}
+	return st, nil
 }
 
 // waitReady waits for the first scan, or for ctx to end.
@@ -120,8 +130,37 @@ func indexPrices(in map[string]config.Price) map[string]index.Price {
 	return out
 }
 
-func newLauncher(cfg config.Config) *launch.Launcher {
-	return launch.New(launch.Options{Mode: launch.Mode(cfg.Resume.Mode), Claude: cfg.Resume.Claude})
+func newLauncher(cfg config.Config, s settings) *launch.Launcher {
+	return launch.New(launch.Options{
+		Mode:      launch.Mode(cfg.Resume.Mode),
+		Claude:    cfg.Resume.Claude,
+		ClaudeDir: launchClaudeDir(s, os.Getenv("CLAUDE_CONFIG_DIR")),
+	})
+}
+
+// launchClaudeDir is the Claude directory to hand to claude as
+// CLAUDE_CONFIG_DIR, so a resumed or new session uses the directory ccdeck
+// is showing. It is empty, meaning leave the environment alone, for the
+// demo and when the directory is the default ~/.claude with the variable
+// unset. The result is absolute, because claude runs in another directory.
+func launchClaudeDir(s settings, env string) string {
+	if s.demo || (s.claudeDir == "" && env == "") {
+		return ""
+	}
+	p, err := claude.ResolvePaths(s.claudeDir)
+	if err != nil {
+		return ""
+	}
+	dir := p.Dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	if env == "" {
+		if home, err := os.UserHomeDir(); err == nil && dir == filepath.Join(home, ".claude") {
+			return ""
+		}
+	}
+	return dir
 }
 
 // tuiOptions translates the config into the UI's options. theme, when not
@@ -134,7 +173,7 @@ func tuiOptions(cfg config.Config, theme string, st core.Store, l core.Launcher)
 	if theme == "" {
 		theme = cfg.Theme
 	}
-	return tui.Options{
+	o := tui.Options{
 		Store:    st,
 		Launcher: l,
 		Theme:    theme,
@@ -146,4 +185,8 @@ func tuiOptions(cfg config.Config, theme string, st core.Store, l core.Launcher)
 		},
 		Keys: cfg.Keys,
 	}
+	if r, ok := st.(interface{ Ready() <-chan struct{} }); ok {
+		o.Ready = r.Ready()
+	}
+	return o
 }

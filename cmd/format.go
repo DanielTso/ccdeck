@@ -28,13 +28,16 @@ func clean(s string) string {
 func clip(s string, w int) string { return ansi.Truncate(s, w, "…") }
 
 // shortID is the abbreviation commands print; show accepts any unique
-// prefix.
+// prefix. Ids come from file names, so they are cleaned too.
 func shortID(id string) string {
 	if len(id) > 8 {
-		return id[:8]
+		id = id[:8]
 	}
-	return id
+	return clean(id)
 }
+
+// cleanPath is a path from a transcript, abbreviated and cleaned.
+func cleanPath(p string) string { return clean(tildePath(p)) }
 
 // tokens formats a token count compactly: 950, 12k, 3.4M.
 func tokens(n int64) string {
@@ -126,8 +129,9 @@ func tildePath(p string) string {
 	return p
 }
 
+// orDash is s cleaned for printing, or a dash when it is empty.
 func orDash(s string) string {
-	if s == "" {
+	if s = clean(s); s == "" {
 		return "-"
 	}
 	return s

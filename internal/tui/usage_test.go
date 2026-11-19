@@ -200,7 +200,8 @@ func TestBurnBinsAndSparkline(t *testing.T) {
 }
 
 func TestUsageSelectionWhileSessionsArrive(t *testing.T) {
-	h := newHarness(t, 120, 35)
+	scanning := make(chan struct{}) // never closed: the scan is running
+	h := newHarness(t, 120, 35, func(o *Options) { o.Ready = scanning })
 	h.keys("3")
 	all := slices.Clone(h.m.env.sessions)
 	h.setSessions(func([]core.Session) []core.Session { return all[len(all)-1:] })
@@ -216,5 +217,43 @@ func TestUsageSelectionWhileSessionsArrive(t *testing.T) {
 	})
 	if s, _ := u.Selected(); s.ID != picked.ID {
 		t.Errorf("selected %q, want the pick %q", s.Title, picked.Title)
+	}
+}
+
+// A session active on several days counts once in the week's total.
+func TestUsageWeekCountsDistinctSessions(t *testing.T) {
+	f := bigStore(3, 0)
+	u := map[string]core.Usage{"acme": {Input: 10, Output: 20}}
+	f.days = []core.DayUsage{
+		{Date: testNow.AddDate(0, 0, -1), Usage: u, Sessions: 2, SessionIDs: []string{"s-a", "s-b"}},
+		{Date: testNow, Usage: u, Sessions: 2, SessionIDs: []string{"s-b", "s-c"}},
+	}
+	h := newHarnessOn(t, f, 120, 35)
+	h.keys("3")
+	l := lineWith(t, h.view(), "2 days")
+	if !strings.Contains(l, "3 sessions") {
+		t.Errorf("week line should count 3 distinct sessions: %q", l)
+	}
+}
+
+// A day whose cost is unknown makes the week's figure partial, never a
+// complete-looking estimate.
+func TestUsageWeekCostWithAnUnpricedDayIsPartial(t *testing.T) {
+	f := bigStore(3, 0)
+	f.days = []core.DayUsage{
+		{Date: testNow.AddDate(0, 0, -1), Usage: map[string]core.Usage{"acme": {Input: 1_000_000}}, CostUSD: 4.04,
+			Sessions: 1, SessionIDs: []string{"s-a"}},
+		{Date: testNow, Usage: map[string]core.Usage{"acme": {Input: 1_000_000}, "mystery": {Input: 50}},
+			Sessions: 2, SessionIDs: []string{"s-a", "s-b"}},
+	}
+	h := newHarnessOn(t, f, 140, 35)
+	h.keys("3")
+	v := h.view()
+	if l := lineWith(t, v, "Today"); !strings.Contains(l, "no price known") {
+		t.Errorf("today: %q", l)
+	}
+	l := lineWith(t, v, "2 days")
+	if !strings.Contains(l, "partial") || strings.Contains(l, "~$4.04 estimate") {
+		t.Errorf("week with an unpriced day must say it is partial: %q", l)
 	}
 }

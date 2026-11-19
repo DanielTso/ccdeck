@@ -78,6 +78,10 @@ type env struct {
 
 	// previewDelay debounces loading entries while the selection moves.
 	previewDelay time.Duration
+
+	// ready is set once the store's start-up scan is complete: from then
+	// on a selection stays on its session, picked by the user or not.
+	ready bool
 }
 
 // homePath shortens a path under the home directory to start with "~".
@@ -99,6 +103,8 @@ type (
 	// resizedMsg follows SetSize, so a view can start work its new size
 	// needs, which SetSize cannot return.
 	resizedMsg struct{}
+	// readyMsg says the store's start-up scan is complete.
+	readyMsg struct{}
 	// openMsg asks a view to show one session (sent to the transcript).
 	openMsg struct{ id string }
 	// navigateMsg asks the root to switch views, or to go back to the
@@ -176,11 +182,20 @@ func resumeOrFocus(e *env, s core.Session) tea.Cmd {
 			return launchMsg{launch: l, what: "Focused " + quote(s.Title)}
 		}
 	}
-	l, err := e.launcher.Resume(s, false)
-	if err != nil {
-		return statusErr(err)
+	return buildLaunch("Resumed "+quote(s.Title), func() (core.Launch, error) { return e.launcher.Resume(s, false) })
+}
+
+// buildLaunch builds a launch in a command, because the launcher stats the
+// project directory and searches PATH, either of which can block. The root
+// runs the launch, one at a time.
+func buildLaunch(what string, build func() (core.Launch, error)) tea.Cmd {
+	return func() tea.Msg {
+		l, err := build()
+		if err != nil {
+			return statusMsg{text: err.Error(), isErr: true}
+		}
+		return launchMsg{launch: l, what: what}
 	}
-	return runLaunch(l, "Resumed "+quote(s.Title))
 }
 
 func quote(title string) string { return "“" + truncate(oneLine(title), 40) + "”" }

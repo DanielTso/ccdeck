@@ -16,19 +16,26 @@ import (
 //
 // Pane assignment is stable: a pane keeps its session for as long as the
 // session exists, live or ended, so panes never trade places as activity
-// changes. A live session without a pane gets an empty pane first, then
-// the pane of an ended session (never the focused one), waiting sessions
-// before the others. Live sessions that still do not fit are listed on the
-// strip under the grid, waiting ones first.
+// changes. A live session without a pane gets a new pane while there are
+// fewer than wanted, else the pane of an ended session (never the focused
+// one), waiting sessions before the others. Live sessions that still do not
+// fit are listed on the strip under the grid, waiting ones first.
+//
+// The assignment is kept for every pane wanted, and the window shows as
+// many as fit: a smaller window hides the last panes but keeps the focused
+// one on screen, and a larger one brings them back where they were. The
+// grid never has more panes than sessions to show.
 type liveView struct {
 	env     *env
 	w, h    int
 	visible bool
 
-	want  int      // panes the user asked for
-	slots []string // session id per pane, "" for an empty pane
-	focus int
-	zoom  bool
+	want     int      // panes the user asked for
+	assigned []string // session id per pane wanted, in pane order; no blanks
+	slots    []string // the panes on screen: assigned, as many as fit
+	focus    int      // index into slots
+	focusID  string   // the focused session, which focus follows
+	zoom     bool
 
 	entries map[string][]core.Entry
 	loadErr map[string]error
@@ -158,14 +165,25 @@ func (v *liveView) Update(msg tea.Msg) tea.Cmd {
 		return v.key(msg)
 	case tea.MouseClickMsg:
 		if i := v.paneAt(msg.X, msg.Y); i >= 0 {
-			v.focus = i
+			v.setFocus(i)
 		}
 	case tea.MouseWheelMsg:
+		// The pane scrolled is the one the keys then act on, so its
+		// "end to follow" works.
 		if i := v.paneAt(msg.X, msg.Y); i >= 0 {
+			v.setFocus(i)
 			v.scroll(i, -wheelDelta(msg))
 		}
 	}
 	return nil
+}
+
+// setFocus focuses pane i, and so its session.
+func (v *liveView) setFocus(i int) {
+	if i < 0 || i >= len(v.slots) {
+		return
+	}
+	v.focus, v.focusID = i, v.slots[i]
 }
 
 func (v *liveView) key(msg tea.KeyPressMsg) tea.Cmd {
@@ -176,11 +194,11 @@ func (v *liveView) key(msg tea.KeyPressMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, k.NextPane):
 		if n > 0 {
-			v.focus = (v.focus + 1) % n
+			v.setFocus((v.focus + 1) % n)
 		}
 	case key.Matches(msg, k.PrevPane):
 		if n > 0 {
-			v.focus = (v.focus + n - 1) % n
+			v.setFocus((v.focus + n - 1) % n)
 		}
 	case key.Matches(msg, k.Zoom):
 		v.zoom = !v.zoom && n > 0
@@ -189,10 +207,13 @@ func (v *liveView) key(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		v.want++
+		if n := v.fit(v.want); n < v.want {
+			v.want = n
+			return tea.Batch(v.reassign(), status("%d %s fit in this window", n, plural(n, "pane", "panes")))
+		}
 		cmd := v.reassign()
 		if len(v.slots) < v.want {
-			v.want = len(v.slots)
-			return tea.Batch(cmd, status("%d %s fit in this window", len(v.slots), plural(len(v.slots), "pane", "panes")))
+			return tea.Batch(cmd, status("Up to %d panes: one opens for each live session", v.want))
 		}
 		return cmd
 	case key.Matches(msg, k.FewerPanes):
@@ -262,39 +283,109 @@ func (v *liveView) load(id string) tea.Cmd {
 
 // Assignment.
 
-// assign sizes the grid to the panes wanted and the room there is, then
-// gives live sessions without a pane the empty panes and the panes of
-// ended sessions. It starts no loads, so SetSize can call it; reassign
-// does both.
+// assign brings the assignment up to date with the sessions and the panes
+// wanted, then works out which panes the window shows. It starts no loads,
+// so SetSize can call it; reassign does both.
 func (v *liveView) assign() {
-	n := v.fit(v.want)
-	if len(v.slots) > n {
-		v.slots = v.slots[:n]
-	}
-	for len(v.slots) < n {
-		v.slots = append(v.slots, "")
-	}
 	byID := make(map[string]*core.Session, len(v.env.sessions))
 	for i := range v.env.sessions {
 		byID[v.env.sessions[i].ID] = &v.env.sessions[i]
 	}
-	for i, id := range v.slots {
-		if _, ok := byID[id]; !ok {
-			v.slots[i] = ""
-		}
-	}
-	for _, s := range v.unplaced() {
-		i := v.freeSlot(byID)
-		if i < 0 {
+	v.assigned = slices.DeleteFunc(v.assigned, func(id string) bool { return byID[id] == nil })
+	v.trim(v.want)
+	fit := v.fit(v.want)
+	for _, s := range v.unassigned() {
+		if !v.place(s.ID, fit, byID) {
 			break
 		}
-		v.slots[i] = s.ID
+	}
+
+	v.slots = v.slots[:0]
+	for _, i := range v.shown(fit) {
+		v.slots = append(v.slots, v.assigned[i])
 	}
 	v.forgetUnassigned()
-	v.focus = min(v.focus, max(len(v.slots)-1, 0))
-	if len(v.slots) == 0 {
+	f := slices.Index(v.slots, v.focusID)
+	if f < 0 {
+		f = min(v.focus, len(v.slots)-1)
+	}
+	v.focus, v.focusID = max(f, 0), ""
+	if len(v.slots) > 0 {
+		v.focusID = v.slots[v.focus]
+	} else {
 		v.zoom = false
 	}
+}
+
+// trim cuts the assignment to n panes, keeping the focused session.
+func (v *liveView) trim(n int) {
+	if len(v.assigned) <= n {
+		return
+	}
+	if f := slices.Index(v.assigned, v.focusID); f >= n && n > 0 {
+		v.assigned[n-1] = v.focusID
+	}
+	v.assigned = v.assigned[:n]
+}
+
+// shown is which panes of the assignment are on screen when n fit: the
+// first n, with the focused one in the last place when it would be off.
+func (v *liveView) shown(n int) []int {
+	n = min(n, len(v.assigned))
+	out := make([]int, n)
+	for i := range out {
+		out[i] = i
+	}
+	if f := slices.Index(v.assigned, v.focusID); f >= n && n > 0 {
+		out[n-1] = f
+	}
+	return out
+}
+
+// place gives a live session a pane: a new one on screen, else an ended
+// session's pane on screen, else a new one off screen, else an ended
+// session's pane off screen. It reports false when there is none.
+func (v *liveView) place(id string, fit int, byID map[string]*core.Session) bool {
+	if len(v.assigned) < fit {
+		v.assigned = append(v.assigned, id)
+		return true
+	}
+	on := v.shown(fit)
+	if i := v.endedPane(on, byID); i >= 0 {
+		v.assigned[i] = id
+		return true
+	}
+	if len(v.assigned) < v.want {
+		v.assigned = append(v.assigned, id)
+		return true
+	}
+	var off []int
+	for i := range v.assigned {
+		if !slices.Contains(on, i) {
+			off = append(off, i)
+		}
+	}
+	if i := v.endedPane(off, byID); i >= 0 {
+		v.assigned[i] = id
+		return true
+	}
+	return false
+}
+
+// endedPane is the pane among panes whose session ended longest ago, never
+// the focused one, or -1.
+func (v *liveView) endedPane(panes []int, byID map[string]*core.Session) int {
+	best := -1
+	for _, i := range panes {
+		s := byID[v.assigned[i]]
+		if s.ID == v.focusID || s.Live != nil {
+			continue
+		}
+		if best < 0 || s.LastActivity.Before(byID[v.assigned[best]].LastActivity) {
+			best = i
+		}
+	}
+	return best
 }
 
 // reassign assigns panes and loads the ones that need it.
@@ -320,12 +411,17 @@ func (v *liveView) loadMissing() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// unplaced lists live sessions without a pane: waiting first, then most
-// recently active first.
-func (v *liveView) unplaced() []core.Session {
+// unassigned lists live sessions without a pane in the assignment:
+// waiting first, then most recently active first.
+func (v *liveView) unassigned() []core.Session { return v.liveExcept(v.assigned) }
+
+// offscreen lists live sessions with no pane on screen, in the same order.
+func (v *liveView) offscreen() []core.Session { return v.liveExcept(v.slots) }
+
+func (v *liveView) liveExcept(ids []string) []core.Session {
 	var waiting, rest []core.Session
 	for _, s := range v.env.sessions {
-		if s.Live == nil || slices.Contains(v.slots, s.ID) {
+		if s.Live == nil || slices.Contains(ids, s.ID) {
 			continue
 		}
 		if s.Status() == core.StatusWaiting {
@@ -335,25 +431,6 @@ func (v *liveView) unplaced() []core.Session {
 		}
 	}
 	return append(waiting, rest...)
-}
-
-// freeSlot is the first empty pane, else the unfocused pane whose session
-// ended longest ago, else -1.
-func (v *liveView) freeSlot(byID map[string]*core.Session) int {
-	if i := slices.Index(v.slots, ""); i >= 0 {
-		return i
-	}
-	best := -1
-	for i, id := range v.slots {
-		s := byID[id]
-		if i == v.focus || s.Live != nil {
-			continue
-		}
-		if best < 0 || s.LastActivity.Before(byID[v.slots[best]].LastActivity) {
-			best = i
-		}
-	}
-	return best
 }
 
 func (v *liveView) forgetUnassigned() {
@@ -497,8 +574,20 @@ func (v *liveView) View() string {
 	for _, segs := range canvas {
 		lines = append(lines, strings.Join(segs, ""))
 	}
+	if len(v.slots) == 0 && len(lines) > 0 {
+		lines[len(lines)/2] = v.centred(v.env.st.muted.Render("No live sessions right now."))
+		if j := len(lines)/2 + 1; j < len(lines) {
+			lines[j] = v.centred(v.env.st.faint.Render("A pane opens for each claude session as it starts."))
+		}
+	}
 	lines = append(lines, v.strip())
 	return clip(strings.Join(lines, "\n"), v.w, v.h)
+}
+
+// centred places s in the middle of a line of the view.
+func (v *liveView) centred(s string) string {
+	s = truncate(s, v.w)
+	return strings.Repeat(" ", max((v.w-width(s))/2, 0)) + s
 }
 
 // border is a box-drawing set. The shape carries meaning on its own, so
@@ -646,7 +735,7 @@ func (v *liveView) strip() string {
 	if live == 0 {
 		return left + st.muted.Render(" · live sessions appear here when claude runs")
 	}
-	off := v.unplaced()
+	off := v.offscreen()
 	if len(off) == 0 {
 		return left
 	}

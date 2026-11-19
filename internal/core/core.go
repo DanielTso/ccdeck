@@ -195,8 +195,11 @@ type PromptHit struct {
 type DayUsage struct {
 	Date     time.Time        `json:"date"` // local midnight
 	Usage    map[string]Usage `json:"usage"`
-	CostUSD  float64          `json:"costUSD"` // estimated; 0 when no prices are known
-	Sessions int              `json:"sessions"`
+	CostUSD  float64          `json:"costUSD"`  // estimated; 0 when no prices are known
+	Sessions int              `json:"sessions"` // sessions that used tokens that day
+	// SessionIDs names the sessions counted in Sessions, sorted, so totals
+	// over several days can count each session once.
+	SessionIDs []string `json:"sessionIds,omitempty"`
 }
 
 // EventKind says what changed in a Store.

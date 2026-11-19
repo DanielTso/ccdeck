@@ -509,7 +509,8 @@ func TestFocusRunsOutsideUpdate(t *testing.T) {
 // At start-up the store publishes sessions one by one. The top row stays
 // selected until the user picks a row; after that the pick is kept.
 func TestSelectionWhileSessionsArrive(t *testing.T) {
-	h := newHarness(t, 120, 35)
+	scanning := make(chan struct{}) // never closed: the scan is running
+	h := newHarness(t, 120, 35, func(o *Options) { o.Ready = scanning })
 	all := slices.Clone(h.m.env.sessions)
 	oldest := all[len(all)-1]
 	h.setSessions(func([]core.Session) []core.Session { return []core.Session{oldest} })
@@ -522,5 +523,98 @@ func TestSelectionWhileSessionsArrive(t *testing.T) {
 	h.setSessions(func([]core.Session) []core.Session { return all })
 	if got := h.selected().ID; got != picked.ID {
 		t.Errorf("selected %q after more sessions arrived, want the pick %q", got, picked.ID)
+	}
+}
+
+// Resume, fork and new stat directories and search PATH, so Update must
+// leave them to a command too.
+func TestLaunchesAreBuiltOutsideUpdate(t *testing.T) {
+	for _, k := range []string{"enter", "f", "n"} {
+		t.Run(k, func(t *testing.T) {
+			h := newHarness(t, 120, 35)
+			h.selectTitle("Tidy shell")
+			_, cmd := h.m.Update(keyPress(k))
+			if got := h.l.Calls(); len(got) != 0 {
+				t.Fatalf("Update called the launcher: %v", got)
+			}
+			h.run(cmd)
+			if got := h.l.Calls(); len(got) != 1 {
+				t.Fatalf("calls after running the command = %v, want one", got)
+			}
+		})
+	}
+}
+
+// A second launch key pressed before the first launch has taken over the
+// terminal must not start the session again when the first one ends.
+func TestOneLaunchAtATime(t *testing.T) {
+	h := newHarness(t, 120, 35)
+	h.l.detached = false
+	h.selectTitle("Tidy shell")
+	_, first := h.m.Update(keyPress("enter"))
+	_, second := h.m.Update(keyPress("enter"))
+	runs := 0
+	for _, cmd := range []tea.Cmd{first, second} {
+		msg := cmd()
+		if lm, ok := msg.(launchMsg); ok {
+			if _, next := h.m.Update(lm); next != nil {
+				runs++
+			}
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("%d launches run, want 1", runs)
+	}
+	h.send(launchDoneMsg{what: "Resumed"})
+	_, again := h.m.Update(keyPress("enter"))
+	lm, ok := again().(launchMsg)
+	if !ok {
+		t.Fatal("no launch after the first one ended")
+	}
+	if _, next := h.m.Update(lm); next == nil {
+		t.Error("a launch after the first one ended was ignored")
+	}
+}
+
+// Once the start-up scan is done, the selection stays on its session when
+// recency reorders the list, even before the user presses a key: enter must
+// act on the session that was read.
+func TestSelectionSticksOnceReady(t *testing.T) {
+	ready := make(chan struct{})
+	h := newHarness(t, 120, 35, func(o *Options) { o.Ready = ready })
+	all := slices.Clone(h.m.env.sessions)
+	top, second := all[0], all[1]
+	reorder := func(first core.Session) {
+		h.setSessions(func(ss []core.Session) []core.Session {
+			out := []core.Session{first}
+			for _, s := range ss {
+				if s.ID != first.ID {
+					out = append(out, s)
+				}
+			}
+			out[0].LastActivity = testNow.Add(time.Duration(len(h.l.Calls())+1) * time.Hour)
+			return out
+		})
+	}
+	// Still scanning: the top row is selected, whichever it is.
+	reorder(second)
+	if got := h.selected().ID; got != second.ID {
+		t.Fatalf("while scanning selected %q, want the top row %q", got, second.ID)
+	}
+	close(ready)
+	h.run(h.m.Init()) // delivers the ready message
+	if !h.m.env.ready {
+		t.Fatal("ready not delivered")
+	}
+	sel := h.selected().ID
+	reorder(top)
+	if got := h.selected().ID; got != sel {
+		t.Errorf("after the scan the selection moved to %q, want it to stay on %q", got, sel)
+	}
+	h.keys("3")
+	usel, _ := h.usage().Selected()
+	reorder(second)
+	if got, _ := h.usage().Selected(); got.ID != usel.ID {
+		t.Errorf("usage selection moved to %q, want %q", got.ID, usel.ID)
 	}
 }

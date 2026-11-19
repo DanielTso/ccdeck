@@ -15,7 +15,7 @@ import (
 // cacheVersion is the version of the cache file format. Bump it whenever
 // cacheFile or anything it holds changes meaning; a file with another
 // version, or another claude.StateVersion, is ignored and rewritten.
-const cacheVersion = 1
+const cacheVersion = 2
 
 // cacheFile is the on-disk cache: derived numbers and identifiers per
 // transcript, never conversation text. claude.State guarantees that for the
@@ -32,6 +32,9 @@ type cachedFile struct {
 	Stamp fileStamp    `json:"stamp"`
 	State claude.State `json:"state"`
 	Days  dayBuckets   `json:"days,omitempty"`
+	// FP is the claude.Fingerprint of the transcript before State.Offset,
+	// which tells a file that only grew from one that was replaced.
+	FP uint64 `json:"fp,omitempty"`
 }
 
 // cacheFileName gives every Claude directory its own cache file.
@@ -76,9 +79,17 @@ func (s *Store) save() {
 		Dir:          s.paths.Dir,
 		Files:        map[string]cachedFile{},
 	}
+	for path, cf := range s.prevCache {
+		c.Files[path] = cf // replaced below by every transcript read since
+	}
 	for _, t := range s.tracked {
 		for _, f := range t.files() {
-			c.Files[f.path] = cachedFile{Stamp: f.stamp, State: f.acc.State(), Days: f.days.buckets}
+			st := f.acc.State()
+			var fp uint64
+			if f.tail.Offset() == st.Offset {
+				fp = f.tail.Fingerprint()
+			}
+			c.Files[f.path] = cachedFile{Stamp: f.stamp, State: st, Days: f.days.buckets, FP: fp}
 		}
 	}
 	if err := writeCache(s.cachePath, &c); err != nil {

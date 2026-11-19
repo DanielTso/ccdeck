@@ -80,7 +80,7 @@ func writeTable(w io.Writer, sessions []core.Session, now time.Time) error {
 			contextFill(s),
 			tokens(s.TotalUsage().Total()),
 			cost(s.CostUSD, s.CostKind),
-			clip(tildePath(s.ProjectDir), 40),
+			clip(cleanPath(s.ProjectDir), 40),
 			clip(clean(s.Title), 60),
 		)
 	}

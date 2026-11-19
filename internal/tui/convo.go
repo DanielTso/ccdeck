@@ -52,10 +52,14 @@ func entryLines(st styles, e core.Entry, w int) []string {
 	return []string{entryLine(st, e, w)}
 }
 
-// textBlock wraps text to w cells under a two-cell lead, keeping at most
-// maxLines (0 means all) and marking a cut with an ellipsis.
+// textBlock wraps text to w cells under a two-cell lead, keeping its line
+// breaks so tables and code keep their shape, then keeps at most maxLines
+// (0 means all) and marks a cut with an ellipsis.
 func textBlock(lead string, style func(...string) string, text string, w, maxLines int) []string {
-	ls := wrap(oneLine(text), w-2)
+	ls := paragraphs(text, w-2)
+	if len(ls) == 0 {
+		ls = []string{""}
+	}
 	if maxLines > 0 && len(ls) > maxLines {
 		ls = ls[:maxLines]
 		ls[maxLines-1] = truncate(ls[maxLines-1]+" …", w-2)

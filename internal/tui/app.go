@@ -4,7 +4,6 @@
 package tui
 
 import (
-	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/DanielTso/ccdeck/internal/core"
 )
@@ -39,11 +39,21 @@ type Model struct {
 	width, height int
 	help          bool
 
+	// noColor is set for a terminal without colour (NO_COLOR, or no
+	// colour profile): the terminal's own default colours are left alone.
+	noColor bool
+
 	status   statusMsg
 	statusID int
 
+	// launching is set while a launch runs: until claude gives the
+	// terminal back, or a detached command returns. Further launches are
+	// ignored meanwhile, so a double press does not resume twice.
+	launching bool
+
 	events <-chan core.Event
 	cancel func()
+	ready  <-chan struct{} // nil once the store is known to be complete
 }
 
 // clockMsg is the periodic re-render tick.
@@ -71,6 +81,9 @@ func New(opts Options) (*Model, error) {
 		return nil, err
 	}
 	m := &Model{themes: themes, autoTheme: opts.Theme == ""}
+	// Until the program reports the colour profile, NO_COLOR decides, so
+	// the first frame does not repaint the terminal either.
+	m.noColor, _ = strconv.ParseBool(os.Getenv("NO_COLOR"))
 	name := opts.Theme
 	if name == "" {
 		name = defaultDarkTheme
@@ -93,7 +106,9 @@ func New(opts Options) (*Model, error) {
 		home:         home,
 		sessions:     opts.Store.Sessions(),
 		previewDelay: previewDelay,
+		ready:        opts.Ready == nil,
 	}
+	m.ready = opts.Ready
 	m.views = [4]view{
 		newSessionsView(m.env),
 		newLiveView(m.env),
@@ -109,7 +124,7 @@ func unknownTheme(name string, themes []theme) error {
 	for i, t := range themes {
 		names[i] = t.name
 	}
-	return fmt.Errorf("tui: unknown theme %q (have %s)", name, strings.Join(names, ", "))
+	return optionErr("theme", "unknown theme %q (have %s)", name, strings.Join(names, ", "))
 }
 
 func (m *Model) themeIndex(name string) int {
@@ -125,6 +140,9 @@ func (m *Model) themeIndex(name string) int {
 // terminal background when the theme follows it.
 func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.waitForEvent(), tickClock()}
+	if ready := m.ready; ready != nil {
+		cmds = append(cmds, func() tea.Msg { <-ready; return readyMsg{} })
+	}
 	if m.autoTheme {
 		cmds = append(cmds, tea.RequestBackgroundColor)
 	}
@@ -159,6 +177,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.SetSize(m.width, max(0, m.height-2))
 		}
 		return m, m.broadcast(resizedMsg{})
+	case tea.ColorProfileMsg:
+		m.noColor = msg.Profile <= colorprofile.ASCII
+		return m, nil
 	case tea.BackgroundColorMsg:
 		if m.autoTheme {
 			name := defaultDarkTheme
@@ -180,6 +201,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.storeEvent(core.Event(msg)), m.waitForEvent())
 	case storeClosedMsg:
 		return m, nil
+	case readyMsg:
+		if m.env.ready {
+			return m, nil
+		}
+		// Re-read the sessions so the selections settle on the complete
+		// list, not on one an event has not caught up with yet.
+		m.env.ready, m.ready = true, nil
+		return m, m.refresh()
 	case clockMsg:
 		return m, tickClock()
 	case statusMsg:
@@ -198,8 +227,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.switchTo(msg.to)
 	case launchMsg:
+		if m.launching {
+			return m, nil
+		}
+		if msg.launch.Cmd != nil {
+			m.launching = true // runLaunch ends with launchDoneMsg
+		}
 		return m, runLaunch(msg.launch, msg.what)
 	case launchDoneMsg:
+		m.launching = false
 		cmd := m.refresh()
 		if msg.err != nil {
 			return m, tea.Batch(cmd, statusErr(msg.err))
@@ -329,8 +365,10 @@ func (m *Model) View() tea.View {
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	v.BackgroundColor = m.env.st.theme.background
-	v.ForegroundColor = m.env.st.theme.text
+	if !m.noColor {
+		v.BackgroundColor = m.env.st.theme.background
+		v.ForegroundColor = m.env.st.theme.text
+	}
 	v.WindowTitle = m.windowTitle()
 	if m.width <= 0 || m.height <= 0 {
 		return v
@@ -494,7 +532,7 @@ func (m *Model) helpBox() string {
 
 // viewGroups is the key group of each view's own bindings.
 var viewGroups = map[viewID]string{
-	viewSessions: "sessions", viewLive: "live", viewTranscript: "transcript",
+	viewSessions: "sessions", viewLive: "live", viewUsage: "usage", viewTranscript: "transcript",
 }
 
 // helpBlocks renders one block per key group active in the current view:

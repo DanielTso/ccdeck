@@ -11,6 +11,7 @@
 package index
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,6 +36,10 @@ type Price = claude.Price
 // ErrUnknownSession is returned by Entries for a session id the store does
 // not know.
 var ErrUnknownSession = errors.New("index: unknown session")
+
+// ErrClaudeDir is returned by New, wrapped with the directory and the
+// reason, when the Claude directory is missing or cannot be read.
+var ErrClaudeDir = errors.New("index: cannot read the Claude directory")
 
 // Options configures a Store. Every field is optional.
 type Options struct {
@@ -76,6 +81,13 @@ type tuning struct {
 	noWatch  bool          // poll and sweep only, as when fsnotify is unavailable
 }
 
+// followedMax is how many conversations Entries keeps incremental: the
+// most the UI follows at once, which is sixteen Live panes (the config's
+// maximum), the Sessions preview and an open transcript, with room to
+// spare. Beyond it, round-robin reads would evict every conversation and
+// reread each transcript from the start on every refresh.
+const followedMax = 24
+
 func defaultTuning() tuning {
 	return tuning{
 		procs:    claude.SystemProcesses(),
@@ -83,7 +95,7 @@ func defaultTuning() tuning {
 		poll:     2 * time.Second,
 		sweep:    30 * time.Second,
 		workers:  min(max(runtime.GOMAXPROCS(0), 2), 8),
-		entries:  8,
+		entries:  followedMax,
 	}
 }
 
@@ -105,6 +117,9 @@ type Store struct {
 	priceStamp fileStamp
 	scanned    bool // the start-up scan finished
 	dirty      bool // the cache is behind the parse state
+	// prevCache is the cache read at start-up, until the scan completes:
+	// a save before then keeps the entries of transcripts not read yet.
+	prevCache map[string]cachedFile
 
 	mu     sync.Mutex
 	sums   map[string]published
@@ -122,6 +137,8 @@ type Store struct {
 
 	ready     chan struct{}
 	done      chan struct{}
+	ctx       context.Context // ends with Close, stopping transcript reads between lines
+	stop      context.CancelFunc
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	closeErr  error
@@ -150,6 +167,9 @@ func newStore(opts Options, tn tuning) (*Store, error) {
 	if paths.Dir, err = filepath.Abs(paths.Dir); err != nil {
 		return nil, err
 	}
+	if err := checkClaudeDir(paths); err != nil {
+		return nil, err
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -168,6 +188,7 @@ func newStore(opts Options, tn tuning) (*Store, error) {
 		ready:     make(chan struct{}),
 		done:      make(chan struct{}),
 	}
+	s.ctx, s.stop = context.WithCancel(context.Background())
 	if dir, err := cacheDir(opts.CacheDir); err != nil {
 		log.Warn("index: no cache directory", "err", err)
 	} else {
@@ -187,6 +208,26 @@ func newStore(opts Options, tn tuning) (*Store, error) {
 		go s.watch()
 	}
 	return s, nil
+}
+
+// checkClaudeDir makes sure the Claude directory can be read, so that a
+// wrong path is reported rather than shown as no sessions. projects/ may be
+// missing (nothing recorded yet) but not unreadable.
+func checkClaudeDir(p claude.Paths) error {
+	fi, err := os.Stat(p.Dir)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%w %s: %w", ErrClaudeDir, p.Dir, err)
+	case !fi.IsDir():
+		return fmt.Errorf("%w %s: not a directory", ErrClaudeDir, p.Dir)
+	}
+	if _, err := os.ReadDir(p.Dir); err != nil {
+		return fmt.Errorf("%w %s: %w", ErrClaudeDir, p.Dir, err)
+	}
+	if _, err := os.ReadDir(p.ProjectsDir()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w %s: %w", ErrClaudeDir, p.Dir, err)
+	}
+	return nil
 }
 
 // cacheDir resolves the cache directory: dir, else $XDG_CACHE_HOME/ccdeck,
@@ -277,12 +318,16 @@ func (s *Store) Subscribe() (events <-chan core.Event, cancel func()) {
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.done)
+		s.stop()
 		if s.w != nil {
 			s.closeErr = s.w.Close()
 		}
 		s.wg.Wait()
-		if s.scanned && s.dirty {
-			s.save() // run has stopped, so its state is ours now
+		if s.dirty {
+			// run has stopped, so its state is ours now. After an
+			// interrupted scan this keeps what was read, so the next
+			// start continues from it.
+			s.save()
 		}
 		s.subs.closeAll()
 	})

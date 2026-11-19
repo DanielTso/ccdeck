@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -46,6 +45,7 @@ var keyGroups = []keyGroup{
 	{"move", []string{"up", "down", "page_up", "page_down", "top", "bottom"}},
 	{"sessions", []string{"resume", "fork", "new", "filter", "search", "sort", "group", "scope"}},
 	{"live", []string{"next_pane", "prev_pane", "zoom", "more_panes", "fewer_panes", "resume"}},
+	{"usage", []string{"resume"}},
 	{"transcript", []string{"next_fold", "prev_fold", "expand", "expand_all", "find", "next_match", "prev_match"}},
 }
 
@@ -153,18 +153,21 @@ func newKeyMap(overrides map[string][]string) (keyMap, error) {
 	for _, name := range slices.Sorted(maps.Keys(overrides)) {
 		b, ok := acts[name]
 		if !ok {
-			return keyMap{}, fmt.Errorf("tui: unknown key action %q (have %s)", name, strings.Join(Actions(), ", "))
+			return keyMap{}, optionErr("keys."+name, "unknown key action %q (have %s)", name, strings.Join(Actions(), ", "))
 		}
 		keys := overrides[name]
 		if len(keys) == 0 || slices.Contains(keys, "") {
-			return keyMap{}, fmt.Errorf("tui: key action %q: no key given", name)
+			return keyMap{}, optionErr("keys."+name, "key action %q: no key given", name)
 		}
 		b.SetKeys(keys...)
 	}
-	return k, k.checkConflicts()
+	return k, k.checkConflicts(overrides)
 }
 
-func (k *keyMap) checkConflicts() error {
+// checkConflicts rejects a key bound to two actions that are active at the
+// same time. The error names the overridden action, which is where the
+// conflict was introduced.
+func (k *keyMap) checkConflicts(overrides map[string][]string) error {
 	acts := k.actions()
 	var shared []string
 	for _, g := range keyGroups {
@@ -183,7 +186,11 @@ func (k *keyMap) checkConflicts() error {
 		for _, name := range scope {
 			for _, kk := range acts[name].Keys() {
 				if prev, dup := owner[kk]; dup && prev != name {
-					return fmt.Errorf("tui: key %q is bound to both %q and %q", kk, prev, name)
+					blame := name
+					if _, ok := overrides[name]; !ok {
+						blame = prev
+					}
+					return optionErr("keys."+blame, "key %q is bound to both %q and %q", kk, prev, name)
 				}
 				owner[kk] = name
 			}

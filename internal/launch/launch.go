@@ -41,6 +41,9 @@ var (
 	ErrBadMode        = errors.New("unknown resume mode")
 )
 
+// configDirEnv is the variable Claude Code reads its directory from.
+const configDirEnv = "CLAUDE_CONFIG_DIR"
+
 // focusTimeout bounds the tmux query made by Focus.
 const focusTimeout = 2 * time.Second
 
@@ -55,6 +58,12 @@ type Options struct {
 	Runner Runner              // nil means the real system
 	Procs  Procs               // nil means /proc
 	Getenv func(string) string // nil means os.Getenv
+	// ClaudeDir is the Claude directory ccdeck reads. When set, claude is
+	// started with CLAUDE_CONFIG_DIR pointing at it, so it finds the same
+	// sessions and account. Leave it empty for the default ~/.claude with
+	// CLAUDE_CONFIG_DIR unset.
+	ClaudeDir string
+	Environ   func() []string // nil means os.Environ
 }
 
 // Launcher implements core.Launcher.
@@ -64,6 +73,9 @@ type Launcher struct {
 	runner Runner
 	procs  Procs
 	getenv func(string) string
+	// claudeDir is passed to claude as CLAUDE_CONFIG_DIR when not empty.
+	claudeDir string
+	environ   func() []string
 }
 
 var _ core.Launcher = (*Launcher)(nil)
@@ -76,6 +88,9 @@ func New(opts Options) *Launcher {
 		runner: opts.Runner,
 		procs:  opts.Procs,
 		getenv: opts.Getenv,
+
+		claudeDir: opts.ClaudeDir,
+		environ:   opts.Environ,
 	}
 	if l.mode == "" {
 		l.mode = ModeAuto
@@ -91,6 +106,9 @@ func New(opts Options) *Launcher {
 	}
 	if l.getenv == nil {
 		l.getenv = os.Getenv
+	}
+	if l.environ == nil {
+		l.environ = os.Environ
 	}
 	return l
 }
@@ -162,6 +180,11 @@ func (l *Launcher) build(dir string, claudeArgs []string) (core.Launch, error) {
 	if mode == ModeSuspend {
 		cmd := exec.Command(claude, claudeArgs...)
 		cmd.Dir = dir
+		if l.claudeDir != "" {
+			// The child inherits ccdeck's environment, with the Claude
+			// directory set last so it wins over any earlier value.
+			cmd.Env = append(l.environ(), configDirEnv+"="+l.claudeDir)
+		}
 		return core.Launch{Cmd: cmd}, nil
 	}
 	tmux, err := l.runner.LookPath("tmux")
@@ -172,7 +195,14 @@ func (l *Launcher) build(dir string, claudeArgs []string) (core.Launch, error) {
 	if mode == ModeTmuxSplit {
 		sub = "split-window"
 	}
-	argv := append([]string{sub, "-c", dir, claude}, claudeArgs...)
+	argv := []string{sub, "-c", dir}
+	if l.claudeDir != "" {
+		// A tmux window gets the tmux server's environment, not ours, so
+		// the Claude directory has to be passed explicitly (tmux 3.0+).
+		argv = append(argv, "-e", configDirEnv+"="+l.claudeDir)
+	}
+	argv = append(argv, claude)
+	argv = append(argv, claudeArgs...)
 	return core.Launch{Cmd: exec.Command(tmux, argv...), Detached: true}, nil
 }
 

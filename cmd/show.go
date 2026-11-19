@@ -80,20 +80,20 @@ func findSession(sessions []core.Session, prefix string) (core.Session, error) {
 	}
 	ids := make([]string, len(found))
 	for i, s := range found {
-		ids[i] = s.ID
+		ids[i] = clean(s.ID)
 	}
 	return core.Session{}, fmt.Errorf("%q matches %d sessions: %s", prefix, len(found), strings.Join(ids, ", "))
 }
 
 func writeShow(w io.Writer, s core.Session, entries []core.Entry, now time.Time) error {
 	row := func(k, v string) { _, _ = fmt.Fprintf(w, "%-10s %s\n", k, v) }
-	row("session", s.ID)
+	row("session", clean(s.ID))
 	row("title", clean(s.Title))
 	row("status", status(s))
 	if s.Live != nil {
 		row("process", fmt.Sprintf("pid %d %s, %s since %s", s.Live.PID, clean(s.Live.Name), s.Live.Status, age(s.Live.StatusSince, now)))
 	}
-	row("project", tildePath(s.ProjectDir))
+	row("project", orDash(cleanPath(s.ProjectDir)))
 	row("branch", orDash(s.GitBranch))
 	row("model", orDash(s.Model))
 	row("started", stamp(s.StartedAt))
@@ -110,7 +110,7 @@ func writeShow(w io.Writer, s core.Session, entries []core.Entry, now time.Time)
 	for _, model := range slices.Sorted(maps.Keys(s.Usage)) {
 		u := s.Usage[model]
 		row("tokens", fmt.Sprintf("%s: %s total, %s fresh (in %s, out %s, cache read %s, write %s)",
-			model, tokens(u.Total()), tokens(u.Fresh()), tokens(u.Input), tokens(u.Output),
+			orDash(model), tokens(u.Total()), tokens(u.Fresh()), tokens(u.Input), tokens(u.Output),
 			tokens(u.CacheRead), tokens(u.CacheWrite5m+u.CacheWrite1h)))
 	}
 	for _, a := range s.Subagents {
@@ -144,7 +144,7 @@ func entryLine(e core.Entry) string {
 	case core.EntryThinking:
 		tag = "thinking"
 	case core.EntryToolUse:
-		tag = "▸ " + e.Tool
+		tag = "▸ " + clean(e.Tool)
 	case core.EntryToolResult:
 		tag = "  ↳"
 		if e.IsError {
@@ -155,7 +155,7 @@ func entryLine(e core.Entry) string {
 	case core.EntryCompact:
 		tag = "compacted"
 	default:
-		tag = string(e.Kind)
+		tag = clean(string(e.Kind))
 	}
 	t := "     "
 	if !e.Time.IsZero() {

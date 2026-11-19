@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -69,7 +70,7 @@ func (f *file) track(acc *claude.Accumulator, days dayBuckets) {
 
 // openFile reads the transcript at path, continuing from c when c is a
 // cached state that still matches the file.
-func openFile(path string, c *cachedFile) (*file, error) {
+func openFile(ctx context.Context, path string, c *cachedFile) (*file, error) {
 	f := &file{path: path}
 	if c != nil {
 		f.resume(c)
@@ -78,18 +79,19 @@ func openFile(path string, c *cachedFile) (*file, error) {
 		f.track(claude.NewAccumulator(), nil)
 		f.tail = claude.NewTailer(path, 0)
 	}
-	_, err := f.update()
+	_, err := f.update(ctx)
 	return f, err
 }
 
 // resume restores the cached state c when the file may only have grown
-// since: it is not smaller than the cached offset, and not the same size
-// with another mtime (rewritten in place). RestoreAccumulator checks the
-// lines the state points at, and the Tailer checks that the cached offset
-// still ends a line; any mismatch leaves f to be parsed from the start.
+// since: it is not smaller than the cached offset, not the same size with
+// another mtime (rewritten in place), and the content before the offset
+// still has the cached fingerprint. RestoreAccumulator checks the lines the
+// state points at, and the Tailer checks that the cached offset still ends
+// a line; any mismatch leaves f to be parsed from the start.
 func (f *file) resume(c *cachedFile) {
 	fi, err := os.Stat(f.path)
-	if err != nil || fi.Size() < c.State.Offset {
+	if err != nil || fi.Size() < c.State.Offset || c.FP == 0 && c.State.Offset > 0 {
 		return
 	}
 	if st := stampOf(fi); st.Size == c.Stamp.Size && st != c.Stamp {
@@ -100,19 +102,24 @@ func (f *file) resume(c *cachedFile) {
 		return
 	}
 	defer func() { _ = r.Close() }() // read-only
+	if fp, err := claude.Fingerprint(r, c.State.Offset); err != nil || fp != c.FP {
+		return
+	}
 	acc, err := claude.RestoreAccumulator(c.State, r)
 	if err != nil {
 		return
 	}
 	f.track(acc, c.Days)
-	f.tail = claude.NewTailer(f.path, c.State.Offset)
+	f.tail = claude.ResumeTailer(f.path, c.State.Offset, c.FP)
 	f.stamp = c.Stamp
 	f.resumed = true
 }
 
 // update reads whatever was appended since the last read. changed is true
-// when lines were read or the file was found replaced and read again.
-func (f *file) update() (changed bool, err error) {
+// when lines were read or the file was found replaced and read again. When
+// ctx ends it stops between lines; the stamp then stays as it was, so the
+// rest is read next time.
+func (f *file) update(ctx context.Context) (changed bool, err error) {
 	fi, err := os.Stat(f.path)
 	if err != nil {
 		return false, err
@@ -121,8 +128,13 @@ func (f *file) update() (changed bool, err error) {
 	if st == f.stamp {
 		return false, nil
 	}
+	if st.Size == f.stamp.Size && f.stamp != (fileStamp{}) {
+		// Appending always grows a transcript: the same size with another
+		// mtime is a rewrite, which may differ anywhere.
+		f.tail.Restart(f)
+	}
 	before := f.tail.Offset()
-	n, err := f.tail.Read(f)
+	n, err := f.tail.ReadContext(ctx, f)
 	if err != nil {
 		return n > 0, err
 	}
@@ -132,18 +144,22 @@ func (f *file) update() (changed bool, err error) {
 
 // load reads one session's transcripts, continuing from cache where it
 // can. It touches no Store state, so start-up workers run it in parallel.
-// main is nil in the result when the transcript is gone.
-func load(id, path string, cache map[string]cachedFile, log *slog.Logger) *tracked {
+// main is nil in the result when the transcript is gone. When ctx ends the
+// result holds what was read so far, which is consistent and can be cached.
+func load(ctx context.Context, id, path string, cache map[string]cachedFile, log *slog.Logger) *tracked {
 	t := &tracked{id: id, path: path, subs: map[string]*subagent{}}
-	f, err := openFile(path, cached(cache, path))
+	f, err := openFile(ctx, path, cached(cache, path))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		return t
+	case ctx.Err() != nil:
+		t.main = f
 		return t
 	case err != nil:
 		log.Warn("index: read transcript", "path", path, "err", err)
 	}
 	t.main = f
-	syncSubagents(t, cache, log)
+	syncSubagents(ctx, t, cache, log)
 	return t
 }
 
@@ -157,7 +173,7 @@ func cached(cache map[string]cachedFile, path string) *cachedFile {
 // syncSubagents brings t's subagent transcripts up to date: new ones are
 // read (from cache when possible), known ones extended, vanished ones
 // dropped. It reports whether anything changed.
-func syncSubagents(t *tracked, cache map[string]cachedFile, log *slog.Logger) bool {
+func syncSubagents(ctx context.Context, t *tracked, cache map[string]cachedFile, log *slog.Logger) bool {
 	if t.path == "" {
 		return false
 	}
@@ -172,7 +188,10 @@ func syncSubagents(t *tracked, cache map[string]cachedFile, log *slog.Logger) bo
 		seen[sf.Path] = true
 		sa, ok := t.subs[sf.Path]
 		if !ok {
-			f, err := openFile(sf.Path, cached(cache, sf.Path))
+			f, err := openFile(ctx, sf.Path, cached(cache, sf.Path))
+			if ctx.Err() != nil {
+				return changed // stopping: what was read of f is not kept
+			}
 			if err != nil {
 				if !errors.Is(err, fs.ErrNotExist) {
 					log.Warn("index: read subagent", "path", sf.Path, "err", err)
@@ -183,7 +202,10 @@ func syncSubagents(t *tracked, cache map[string]cachedFile, log *slog.Logger) bo
 			t.subs[sf.Path] = sa
 			changed = true
 		} else {
-			c, err := sa.f.update()
+			c, err := sa.f.update(ctx)
+			if ctx.Err() != nil {
+				return changed || c
+			}
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				log.Warn("index: read subagent", "path", sf.Path, "err", err)
 			}

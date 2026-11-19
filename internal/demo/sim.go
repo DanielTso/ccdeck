@@ -128,6 +128,10 @@ func (st *Store) seedHistory(now time.Time) {
 		}
 		d := st.day(today.AddDate(0, 0, -i))
 		d.Sessions = 1 + st.rng.IntN(8)
+		for n := range d.Sessions {
+			// Invented sessions that are no longer listed.
+			d.SessionIDs = append(d.SessionIDs, fmt.Sprintf("past-%02d-%d", i, n))
+		}
 		for _, m := range []string{opus, sonnet, haiku}[:1+st.rng.IntN(3)] {
 			u := core.Usage{
 				Input:        int64(2_000 + st.rng.IntN(48_000)),
@@ -143,6 +147,7 @@ func (st *Store) seedHistory(now time.Time) {
 	for _, x := range st.sessions {
 		d := st.day(x.s.LastActivity)
 		d.Sessions++
+		d.SessionIDs = append(d.SessionIDs, x.s.ID)
 		for m, u := range x.s.Usage {
 			d.Usage[m] = d.Usage[m].Add(u)
 		}

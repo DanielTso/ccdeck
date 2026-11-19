@@ -24,21 +24,43 @@ func oneLine(s string) string { return strings.Join(strings.Fields(sanitize(s)),
 
 // sanitize removes terminal escape sequences and control characters other
 // than newline and tab, so text from a transcript cannot move the cursor,
-// recolour the screen or throw off width measurement.
+// recolour the screen or throw off width measurement. It also takes apart
+// emoji sequences (see isJoiner), whose width terminals disagree on.
 func sanitize(s string) string {
-	if !strings.ContainsFunc(s, isControl) {
+	if !strings.ContainsFunc(s, func(r rune) bool { return isControl(r) || isJoiner(r) }) {
 		return s
 	}
+	if strings.ContainsFunc(s, isControl) {
+		s = ansi.Strip(s)
+	}
 	return strings.Map(func(r rune) rune {
-		if isControl(r) {
+		if isControl(r) || isJoiner(r) {
 			return -1
 		}
 		return r
-	}, ansi.Strip(s))
+	}, s)
 }
 
 func isControl(r rune) bool {
 	return (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r < 0xa0)
+}
+
+// isJoiner reports the code points that combine emoji into one wider
+// grapheme: zero-width joiners, variation selectors, skin-tone modifiers
+// and tag characters. Grapheme widths (which this package measures with)
+// and wcwidth (which the renderer and most terminals use unless they report
+// mode 2027) count such sequences differently, so a row holding one would
+// overflow. Without them each emoji stands alone and both agree.
+func isJoiner(r rune) bool {
+	switch {
+	case r == 0x200d, r == 0xfe0e, r == 0xfe0f:
+		return true
+	case r >= 0x1f3fb && r <= 0x1f3ff:
+		return true
+	case r >= 0xe0020 && r <= 0xe007f:
+		return true
+	}
+	return false
 }
 
 // paragraphs wraps text to w cells keeping its line breaks. Runs of blank

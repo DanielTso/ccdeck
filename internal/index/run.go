@@ -30,6 +30,7 @@ func (s *Store) run() {
 	}
 	s.scanned = true
 	s.save()
+	s.prevCache = nil
 
 	poll := time.NewTicker(s.tn.poll)
 	defer poll.Stop()
@@ -57,6 +58,7 @@ func (s *Store) run() {
 func (s *Store) scan() {
 	s.regs = s.readRegistry()
 	cache := s.loadCache()
+	s.prevCache = cache // kept by a save before the scan completes
 	files, err := s.paths.Transcripts()
 	if err != nil {
 		s.log.Warn("index: list transcripts", "err", err)
@@ -138,12 +140,9 @@ func (s *Store) loadAll(files []claude.TranscriptFile, cache map[string]cachedFi
 	for range max(s.tn.workers, 1) {
 		wg.Go(func() {
 			for f := range jobs {
-				t := load(f.SessionID, f.Path, cache, s.log)
-				select {
-				case results <- t:
-				case <-s.done:
-					return
-				}
+				// After Close, load stops between lines and returns what it
+				// read, which is still delivered so that it can be cached.
+				results <- load(s.ctx, f.SessionID, f.Path, cache, s.log)
 			}
 		})
 	}
@@ -238,7 +237,7 @@ func (s *Store) refresh(id, path string) {
 		if path == "" {
 			return
 		}
-		t = load(id, path, nil, s.log)
+		t = load(s.ctx, id, path, nil, s.log)
 		if t.main == nil && !s.live(id) {
 			return
 		}
@@ -253,20 +252,21 @@ func (s *Store) refresh(id, path string) {
 
 	grew := false
 	if t.main == nil && t.path != "" {
-		if f, err := openFile(t.path, nil); err == nil {
+		if f, err := openFile(s.ctx, t.path, nil); err == nil {
 			t.main, grew = f, true
 		}
 	} else if t.main != nil {
-		c, err := t.main.update()
+		c, err := t.main.update(s.ctx)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			t.main, t.subs = nil, map[string]*subagent{}
+		case s.ctx.Err() != nil:
 		case err != nil:
 			s.log.Warn("index: read transcript", "path", t.path, "err", err)
 		}
 		grew = c
 	}
-	subsChanged := t.main != nil && syncSubagents(t, nil, s.log)
+	subsChanged := t.main != nil && syncSubagents(s.ctx, t, nil, s.log)
 	if grew || subsChanged {
 		s.dirty = true
 	}

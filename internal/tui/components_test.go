@@ -189,3 +189,24 @@ func TestThemeTokensAndBuiltins(t *testing.T) {
 		t.Errorf("tokens %d, actions %d", len(ThemeTokens()), len(Actions()))
 	}
 }
+
+// Previews and Live panes keep the line breaks of prompts and replies, so
+// tables and code read as they were written, within each entry's cap.
+func TestConversationKeepsLineBreaks(t *testing.T) {
+	st := newStyles(builtins[0])
+	text := "Here is the comparison:\n| Option | Latency |\n|---|---|\n| A | 10ms |\n| B | 20ms |"
+	lines := entryLines(st, core.Entry{Kind: core.EntryText, Text: text}, 60)
+	if len(lines) != 4 {
+		t.Fatalf("%d lines, want the cap of 4: %q", len(lines), lines)
+	}
+	if got := ansi.Strip(lines[1]); strings.TrimSpace(got) != "| Option | Latency |" {
+		t.Errorf("second line = %q, want the table header on its own line", got)
+	}
+	if got := ansi.Strip(lines[3]); !strings.HasSuffix(got, "…") {
+		t.Errorf("a cut entry should end in an ellipsis: %q", got)
+	}
+	prompt := entryLines(st, core.Entry{Kind: core.EntryPrompt, Text: "fix this:\n```go\nfunc main() {}\n```"}, 60)
+	if got := ansi.Strip(prompt[1]); strings.TrimSpace(got) != "```go" {
+		t.Errorf("prompt line 2 = %q", got)
+	}
+}

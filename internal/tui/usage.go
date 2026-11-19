@@ -171,7 +171,8 @@ func (v *usageView) rebuild() {
 		}
 		return cmp.Compare(a.ID, b.ID)
 	})
-	// As in Sessions: the top row until the user picks one, then the pick.
+	// As in Sessions: the top row until the scan is complete or the user
+	// picks one, then that session.
 	i := 0
 	if v.picked {
 		i = slices.IndexFunc(v.rows, func(s *core.Session) bool { return s.ID == v.selID })
@@ -180,6 +181,9 @@ func (v *usageView) rebuild() {
 		}
 	}
 	v.setCursor(i)
+	if v.env.ready && v.selID != "" {
+		v.picked = true
+	}
 }
 
 func (v *usageView) move(d int) { v.pick(min(max(v.cursor+d, 0), len(v.rows)-1)) }
@@ -289,21 +293,35 @@ func (v *usageView) totals() []string {
 	}
 	var week core.DayUsage
 	week.Usage = map[string]core.Usage{}
+	ids := map[string]bool{}
+	partial := false
 	for _, d := range v.days {
 		for m, u := range d.Usage {
 			week.Usage[m] = week.Usage[m].Add(u)
 		}
+		// A day with tokens and no cost has a model without a price: the
+		// week's sum then leaves that day out, and must say so.
+		if d.CostUSD <= 0 && sumUsage(d.Usage).Total() > 0 {
+			partial = true
+		}
 		week.CostUSD += d.CostUSD
-		week.Sessions += d.Sessions
+		for _, id := range d.SessionIDs {
+			ids[id] = true
+		}
+		// A store that does not name its sessions can only be summed.
+		week.Sessions += max(d.Sessions-len(d.SessionIDs), 0)
 	}
+	week.Sessions += len(ids)
 	today := core.DayUsage{}
 	if len(v.days) > 0 {
 		today = v.days[len(v.days)-1]
 	}
-	return []string{v.totalLine("Today", today), v.totalLine(itoa(len(v.days))+" days", week)}
+	return []string{v.totalLine("Today", today, false), v.totalLine(itoa(len(v.days))+" days", week, partial)}
 }
 
-func (v *usageView) totalLine(label string, d core.DayUsage) string {
+// totalLine is one line of totals. partial marks a cost that leaves out
+// days with an unpriced model.
+func (v *usageView) totalLine(label string, d core.DayUsage, partial bool) string {
 	st := v.env.st
 	u := sumUsage(d.Usage)
 	sep := st.faint.Render(" · ")
@@ -311,7 +329,7 @@ func (v *usageView) totalLine(label string, d core.DayUsage) string {
 		st.text.Render(fmtTokens(u.Total())) + st.muted.Render(" tokens"),
 		st.text.Render(fmtTokens(u.Fresh())) + st.muted.Render(" fresh"),
 		st.text.Render(fmtTokens(u.Output)) + st.muted.Render(" out"),
-		v.dayCost(d.CostUSD, u.Total()),
+		v.dayCost(d.CostUSD, u.Total(), partial),
 		st.text.Render(itoa(d.Sessions)) + st.muted.Render(plural(d.Sessions, " session", " sessions")),
 	}
 	line := " " + st.bold.Render(fit(label, 8)) + " "
@@ -329,14 +347,17 @@ func (v *usageView) totalLine(label string, d core.DayUsage) string {
 }
 
 // dayCost shows a daily figure, which is always an estimate. Zero dollars
-// for days with tokens means no price was known, and says so.
-func (v *usageView) dayCost(usd float64, tokens int64) string {
+// for days with tokens means no price was known, and says so. A partial
+// figure covers only some of the tokens, so it is a lower bound.
+func (v *usageView) dayCost(usd float64, tokens int64, partial bool) string {
 	st := v.env.st
 	switch {
 	case tokens == 0:
 		return st.muted.Render("no cost")
 	case usd <= 0:
 		return st.muted.Render("no price known")
+	case partial:
+		return st.text.Render("≥ "+fmtCost(core.CostEstimated, usd)) + st.muted.Render(" partial estimate")
 	}
 	return st.text.Render(fmtCost(core.CostEstimated, usd)) + st.muted.Render(" estimate")
 }

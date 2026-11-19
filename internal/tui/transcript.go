@@ -49,6 +49,7 @@ type transcriptView struct {
 	query   string // lower case
 	matches []int  // items containing the query, in order
 	match   int    // index into matches
+	opened  int    // the item find unfolded to show a match, -1 for none
 }
 
 // titem is one displayed step: a single entry, or a tool call together
@@ -72,7 +73,7 @@ type transcriptMsg struct {
 const gutter = 2 // cells left of the text for the selection and match marks
 
 func newTranscriptView(e *env) *transcriptView {
-	t := &transcriptView{env: e, sel: -1, follow: true, find: textinput.New()}
+	t := &transcriptView{env: e, sel: -1, opened: -1, follow: true, find: textinput.New()}
 	t.find.Prompt = "find: "
 	t.find.Placeholder = "text in this transcript"
 	t.find.SetStyles(inputStyles(e.st))
@@ -185,6 +186,7 @@ func (t *transcriptView) open(id string) tea.Cmd {
 		t.gen++
 		t.id = id
 		t.entries, t.items, t.pending, t.starts = nil, nil, nil, nil
+		t.opened = -1
 		t.loaded, t.loadErr, t.loading, t.dirty = false, nil, false, false
 		t.offset, t.follow, t.unseen, t.sel = 0, true, 0, -1
 		t.clearFind()
@@ -216,6 +218,7 @@ func (t *transcriptView) setEntries(entries []core.Entry) {
 		(len(old) == 0 || sameEntry(entries[len(old)-1], old[len(old)-1]))
 	if !extends {
 		t.items, t.pending, t.starts = nil, nil, nil
+		t.opened = -1
 		t.sel, t.offset = -1, 0
 		old = nil
 	}
@@ -474,12 +477,21 @@ func (t *transcriptView) selectFold(dir int) {
 	}
 }
 
+// toggle expands or folds item i, keeping its first line where it is on
+// screen, also while following: the body opens downwards.
 func (t *transcriptView) toggle(i int) {
 	if i < 0 || i >= len(t.items) || !t.items[i].fold {
 		return
 	}
+	if i == t.opened {
+		t.opened = -1 // the user's choice now, not find's
+	}
+	row := t.starts[i] - t.offset
 	t.setExpanded(i, !t.items[i].expanded)
+	t.follow = false
 	t.relayout()
+	t.scrollTo(t.starts[i] - row)
+	t.reveal(i)
 }
 
 func (t *transcriptView) setExpanded(i int, on bool) {
@@ -587,6 +599,18 @@ func (t *transcriptView) clearFind() {
 	t.find.Blur()
 	t.find.Reset()
 	t.query, t.matches, t.match = "", nil, 0
+	t.refold(-1)
+}
+
+// refold folds again the item find unfolded, unless it is keep.
+func (t *transcriptView) refold(keep int) {
+	i := t.opened
+	if i < 0 || i == keep || i >= len(t.items) {
+		return
+	}
+	t.opened = -1
+	t.setExpanded(i, false)
+	t.relayout()
 }
 
 // search finds the items containing the query. With jump it moves to the
@@ -643,9 +667,14 @@ func (t *transcriptView) step(d int) {
 }
 
 // goToMatch shows the current match, unfolding it so the text is visible.
+// A fold find opened for an earlier match closes again.
 func (t *transcriptView) goToMatch() {
 	i := t.matches[t.match]
+	t.refold(i)
 	if t.items[i].fold {
+		if !t.items[i].expanded {
+			t.opened = i
+		}
 		t.setExpanded(i, true)
 		t.relayout()
 		t.sel = i

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -117,6 +118,11 @@ func doctorClaudeDir(ctx context.Context, w io.Writer, s settings, cfg config.Co
 		},
 	}))
 	st, err := index.New(index.Options{ClaudeDir: s.claudeDir, Prices: indexPrices(cfg.Prices), Logger: log})
+	if errors.Is(err, index.ErrClaudeDir) {
+		_, _ = fmt.Fprintln(w, "\nIndex")
+		row("status", "not run: %v", err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -165,7 +171,7 @@ func doctorClaudeDir(ctx context.Context, w io.Writer, s settings, cfg config.Co
 			continue
 		}
 		_, _ = fmt.Fprintf(w, "  %s  pid %-7d %-8s %-18s context %-5s %s\n",
-			shortID(sess.ID), sess.Live.PID, sess.Live.Status, orDash(sess.Model), contextFill(sess), tildePath(sess.ProjectDir))
+			shortID(sess.ID), sess.Live.PID, orDash(string(sess.Live.Status)), orDash(sess.Model), contextFill(sess), cleanPath(sess.ProjectDir))
 	}
 	return nil
 }

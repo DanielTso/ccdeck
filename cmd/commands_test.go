@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,7 +209,7 @@ func TestTUIOptions(t *testing.T) {
 	cfg.Keys["quit"] = []string{"x"}
 	cfg.Layout = config.Layout{PreviewRatio: 0.4, LivePanes: 6, GroupByProject: true}
 	st := demo.New(demo.Options{})
-	l := newLauncher(cfg)
+	l := newLauncher(cfg, settings{})
 
 	o := tuiOptions(cfg, "", st, l)
 	if o.Theme != "mine" || o.Themes["mine"].Base != "paper" || o.Themes["mine"].Colors["accent"] != "#ff8800" {
@@ -234,7 +235,7 @@ func TestConfigBoundsSuitTheUI(t *testing.T) {
 	} {
 		cfg := config.Default()
 		cfg.Layout = lay
-		if _, err := tui.New(tuiOptions(cfg, "", st, newLauncher(cfg))); err != nil {
+		if _, err := tui.New(tuiOptions(cfg, "", st, newLauncher(cfg, settings{}))); err != nil {
 			t.Errorf("layout %+v: %v", lay, err)
 		}
 	}
@@ -245,5 +246,126 @@ func TestIndexPrices(t *testing.T) {
 	p := got["m"]
 	if p.Input != 1 || p.Output != 2 || p.CacheRead != 3 || p.CacheWrite5m != 4 || p.CacheWrite1h != 5 || p.WebSearch != 0 {
 		t.Errorf("price = %+v", p)
+	}
+}
+
+func TestLaunchClaudeDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	def := filepath.Join(home, ".claude")
+	alt := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		s    settings
+		env  string
+		want string
+	}{
+		{"default, variable unset", settings{}, "", ""},
+		{"flag", settings{claudeDir: alt}, "", alt},
+		{"flag naming the default", settings{claudeDir: def}, "", ""},
+		{"relative flag becomes absolute", settings{claudeDir: "rel/dir"}, "", filepath.Join(wd, "rel/dir")},
+		{"variable", settings{}, alt, alt},
+		{"flag beats variable", settings{claudeDir: alt}, "/elsewhere", alt},
+		{"demo", settings{claudeDir: alt, demo: true}, alt, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", tt.env)
+			if got := launchClaudeDir(tt.s, tt.env); got != tt.want {
+				t.Errorf("launchClaudeDir = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Every string list, show and doctor print from a transcript is cleaned of
+// escape sequences, which could otherwise retitle or reprogram the terminal.
+func TestPrintedTranscriptFieldsAreCleaned(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	const evil = "\x1b]0;PWN\x07\x1b[31m"
+	id := "6a1e2d3c-0000-4000-8000-00000000abcd"
+	proj := filepath.Join(dir, "projects", "-work-evil")
+	cwd := "/work/ev" + evil + "il"
+	lines := []string{
+		`{"type":"user","uuid":"u1","timestamp":"2026-01-10T10:00:00.000Z","cwd":` + jsonString(t, cwd) + `,"gitBranch":` + jsonString(t, "br"+evil) + `,"sessionId":"` + id + `","message":{"role":"user","content":"Do it"}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-01-10T10:00:05.000Z","message":{"id":"m1","model":` + jsonString(t, "claude-x"+evil) + `,"content":[{"type":"tool_use","id":"t1","name":` + jsonString(t, "Bash"+evil) + `,"input":{"command":"ls"}}],"usage":{"input_tokens":100,"output_tokens":20}}}`,
+	}
+	writeFile(t, filepath.Join(proj, id+".jsonl"), strings.Join(lines, "\n")+"\n")
+	sub := filepath.Join(proj, id, "subagents")
+	writeFile(t, filepath.Join(sub, "agent-ag1.jsonl"),
+		`{"type":"assistant","uuid":"s1","timestamp":"2026-01-10T10:00:06.000Z","isSidechain":true,"message":{"id":"m2","model":`+jsonString(t, "claude-y"+evil)+`,"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":5,"output_tokens":1}}}`+"\n")
+	writeFile(t, filepath.Join(sub, "agent-ag1.meta.json"), `{"agentType":`+jsonString(t, "Explore"+evil)+`,"description":"look"}`)
+
+	// Make the session live, owned by this test process, so doctor lists it.
+	if stat, err := os.ReadFile("/proc/self/stat"); err == nil {
+		f := strings.Fields(string(stat[strings.LastIndexByte(string(stat), ')')+1:]))
+		writeFile(t, filepath.Join(dir, "sessions", "1.json"), fmt.Sprintf(
+			`{"pid":%d,"sessionId":"%s","cwd":%s,"procStart":"%s","status":"idle","name":%s}`,
+			os.Getpid(), id, jsonString(t, cwd), f[19], jsonString(t, "n"+evil)))
+	}
+
+	for _, args := range [][]string{{"list"}, {"show", id[:6]}, {"doctor"}} {
+		t.Run(args[0], func(t *testing.T) {
+			out, err := run(t, append(args, "--claude-dir", dir)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.ContainsAny(out, "\x1b\x07") {
+				t.Errorf("output carries escape sequences: %q", out)
+			}
+		})
+	}
+}
+
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// A wrong Claude directory is an error naming it, not an empty listing.
+func TestMissingClaudeDir(t *testing.T) {
+	isolate(t)
+	missing := filepath.Join(t.TempDir(), "typo")
+	for _, args := range [][]string{{"list"}, {"show", "abc"}} {
+		_, err := run(t, append(args, "--claude-dir", missing)...)
+		if err == nil || !strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "--claude-dir") {
+			t.Errorf("%s: err = %v, want the directory named", args[0], err)
+		}
+	}
+	out, err := run(t, "doctor", "--claude-dir", missing)
+	if err != nil {
+		t.Fatalf("doctor fails instead of reporting: %v", err)
+	}
+	if !strings.Contains(out, "not run") || !strings.Contains(out, "colour profile") {
+		t.Errorf("doctor output:\n%s", out)
+	}
+}
+
+// A value the UI rejects is reported with the file and key it came from.
+func TestUIErrorsNameTheConfigKey(t *testing.T) {
+	isolate(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	for _, tt := range []struct{ file, want string }{
+		{`theme = "nosuch"`, "key theme: unknown theme"},
+		{"[keys]\nfork = [\"q\"]", "key keys.fork: key \"q\" is bound to both"},
+	} {
+		writeFile(t, cfgPath, tt.file+"\n")
+		_, err := run(t, "--demo", "--config", cfgPath)
+		if err == nil || !strings.Contains(err.Error(), cfgPath) || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: err = %v, want the file and %q", tt.file, err, tt.want)
+		}
+	}
+	_, err := run(t, "--demo", "--theme", "nosuch")
+	if err == nil || !strings.HasPrefix(err.Error(), "--theme: ") {
+		t.Errorf("--theme: err = %v", err)
 	}
 }

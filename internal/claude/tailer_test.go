@@ -131,3 +131,51 @@ func TestTailerMissingFile(t *testing.T) {
 		t.Errorf("err = %v, want fs.ErrNotExist", err)
 	}
 }
+
+// A file replaced by different content of the same size, or by longer
+// content whose byte before the old offset happens to be a newline, ends
+// every line where the old one did. Only the content can tell them apart.
+func TestTailerNoticesReplacementWithTheSameLineBoundaries(t *testing.T) {
+	for _, tt := range []struct{ name, old, new string }{
+		{"same size", "{\"p\":\"AAAA\"}\n{\"u\":100}\n", "{\"p\":\"BBBB\"}\n{\"u\":300}\n"},
+		{"longer", "{\"p\":\"AAAA\"}\n{\"u\":100}\n", "{\"p\":\"BBBB\"}\n{\"u\":300}\n{\"more\":1}\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := writeFile(t, "t.jsonl", tt.old)
+			tl := NewTailer(p, 0)
+			var r recorder
+			if _, err := tl.Read(&r); err != nil {
+				t.Fatal(err)
+			}
+			fp := tl.Fingerprint()
+			if err := os.WriteFile(p, []byte(tt.new), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tl.Read(&r); err != nil {
+				t.Fatal(err)
+			}
+			if r.resets != 1 || strings.Join(r.lines, "") != tt.new {
+				t.Errorf("resets=%d lines=%q", r.resets, r.lines)
+			}
+
+			// A tailer resumed from a remembered offset and fingerprint
+			// checks the same way.
+			if err := os.WriteFile(p, []byte(tt.old), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r = recorder{}
+			resumed := ResumeTailer(p, int64(len(tt.old)), fp)
+			if _, err := resumed.Read(&r); err != nil || r.resets != 0 || len(r.lines) != 0 {
+				t.Errorf("unchanged file: resets=%d lines=%q err=%v", r.resets, r.lines, err)
+			}
+			if err := os.WriteFile(p, []byte(tt.new), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r = recorder{}
+			resumed = ResumeTailer(p, int64(len(tt.old)), fp)
+			if _, err := resumed.Read(&r); err != nil || r.resets != 1 || strings.Join(r.lines, "") != tt.new {
+				t.Errorf("replaced file: resets=%d lines=%q err=%v", r.resets, r.lines, err)
+			}
+		})
+	}
+}

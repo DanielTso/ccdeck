@@ -1,6 +1,7 @@
 package index
 
 import (
+	"slices"
 	"time"
 
 	"github.com/DanielTso/ccdeck/internal/core"
@@ -98,7 +99,7 @@ func (s *Store) Daily(days int) []core.DayUsage {
 	s.mu.Lock()
 	prices := s.prices
 	touched := make([]bool, days)
-	for _, p := range s.sums {
+	for id, p := range s.sums {
 		clear(touched)
 		for bucket, models := range p.days {
 			if bucket == 0 {
@@ -116,10 +117,15 @@ func (s *Store) Daily(days int) []core.DayUsage {
 		for i, ok := range touched {
 			if ok {
 				out[i].Sessions++
+				out[i].SessionIDs = append(out[i].SessionIDs, id)
 			}
 		}
 	}
 	s.mu.Unlock()
+
+	for i := range out {
+		slices.Sort(out[i].SessionIDs)
+	}
 
 	for i := range out {
 		if c, ok := prices.Estimate(out[i].Usage); ok {

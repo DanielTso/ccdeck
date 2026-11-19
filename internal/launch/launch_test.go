@@ -397,3 +397,58 @@ func TestProcFSAndFocusWithAwkwardCommandNames(t *testing.T) {
 		t.Errorf("args = %q", got.Cmd.Args)
 	}
 }
+
+func TestClaudeDirReachesClaude(t *testing.T) {
+	dir := t.TempDir()
+	const claudeDir = "/srv/alt-claude"
+	const tmux = "/usr/bin/tmux"
+	const claude = "/usr/local/bin/claude"
+	environ := func() []string { return []string{"HOME=/home/u", "CLAUDE_CONFIG_DIR=/stale"} }
+
+	t.Run("suspend sets the variable last", func(t *testing.T) {
+		l := New(Options{Mode: ModeSuspend, Runner: newFakeRunner(), Getenv: env(noTmux),
+			ClaudeDir: claudeDir, Environ: environ})
+		for _, build := range []func() (core.Launch, error){
+			func() (core.Launch, error) { return l.Resume(core.Session{ID: "abc-123", ProjectDir: dir}, false) },
+			func() (core.Launch, error) { return l.Resume(core.Session{ID: "abc-123", ProjectDir: dir}, true) },
+			func() (core.Launch, error) { return l.New(dir) },
+		} {
+			got, err := build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"HOME=/home/u", "CLAUDE_CONFIG_DIR=/stale", "CLAUDE_CONFIG_DIR=" + claudeDir}
+			if !reflect.DeepEqual(got.Cmd.Env, want) {
+				t.Errorf("env = %q, want %q", got.Cmd.Env, want)
+			}
+		}
+	})
+	t.Run("tmux passes it with -e", func(t *testing.T) {
+		for _, mode := range []Mode{ModeTmuxWindow, ModeTmuxSplit, ModeAuto} {
+			l := New(Options{Mode: mode, Runner: newFakeRunner(), Getenv: env(inTmux),
+				ClaudeDir: claudeDir, Environ: environ})
+			got, err := l.Resume(core.Session{ID: "abc-123", ProjectDir: dir}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sub := "new-window"
+			if mode == ModeTmuxSplit {
+				sub = "split-window"
+			}
+			want := []string{tmux, sub, "-c", dir, "-e", "CLAUDE_CONFIG_DIR=" + claudeDir, claude, "--resume", "abc-123"}
+			if !reflect.DeepEqual(got.Cmd.Args, want) {
+				t.Errorf("%s: args = %q\nwant %q", mode, got.Cmd.Args, want)
+			}
+		}
+	})
+	t.Run("default directory leaves the environment alone", func(t *testing.T) {
+		l := New(Options{Mode: ModeSuspend, Runner: newFakeRunner(), Getenv: env(noTmux), Environ: environ})
+		got, err := l.New(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Cmd.Env != nil {
+			t.Errorf("env = %q, want nil (inherit)", got.Cmd.Env)
+		}
+	})
+}

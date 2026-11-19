@@ -319,10 +319,13 @@ a `tea.Cmd`.
    project, `o` open the full transcript, `/` fuzzy filter, `p` prompt search,
    `s` cycle sort (recent, project, context, cost), `g` group by project,
    `a` cycle scope (all, live, ended).
-2. **Live** (`2`): a grid of panes for live sessions, most recently active
-   first. Pane header: status badge with `waitingFor`, title, model, context
-   gauge, cost. Body: the conversation tail, following. `tab`/`shift+tab` move
-   focus, `z` zoom a pane, `+`/`-` change the pane count, `enter` focus the
+2. **Live** (`2`): a grid of panes for live sessions, waiting ones placed
+   first. Pane assignment is stable (a pane keeps its session, ended or not,
+   until a live one needs it); the grid shows no more panes than sessions,
+   and a smaller window hides panes but never the focused one. Pane header:
+   status badge with `waitingFor`, title, model, context gauge, cost. Body:
+   the conversation tail, following. `tab`/`shift+tab` move focus, `z` zoom
+   a pane, `+`/`-` change the pane count, `enter` focus the
    session. A session that starts waiting for approval must stand out.
 3. **Usage** (`3`): totals for today and the last 7 days, per-model breakdown,
    a per-session table with context gauges and a burn-rate sparkline built
