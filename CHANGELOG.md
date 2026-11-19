@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-19
+
 ### Changed
 
 - CI now runs the test suite on macOS as well as Linux.
