@@ -623,7 +623,8 @@ programs it starts are `claude` and `tmux`, when you ask (and, for the status-li
 
 Linux first; it was built and tested on WSL2. Release archives are built for Linux and macOS. On
 macOS there is no `/proc`: ccdeck can only check that a registered pid exists (so a stale registry file can show
-as running), and Focus is unavailable. There are no Windows builds. The macOS paths are untested.
+as running), and Focus is unavailable. There are no Windows builds. The test suite runs on macOS in CI, but the
+dashboard has not been used interactively on a Mac.
 
 ## Development
 

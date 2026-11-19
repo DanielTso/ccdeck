@@ -256,7 +256,8 @@ func TestStatuslineWrap(t *testing.T) {
 		hangs   bool   // runs until the timeout cuts it off
 		maxTook time.Duration
 	}{
-		{"passes stdin and prints the output", "wc -c", fmt.Sprintf("%d\n", len(input)), false, 0},
+		// tr strips the padding BSD wc puts before the count.
+		{"passes stdin and prints the output", "wc -c | tr -d ' '", fmt.Sprintf("%d\n", len(input)), false, 0},
 		{"keeps several lines", `printf 'one\ntwo\nthree\n'`, "one\ntwo\nthree\n", false, 0},
 		{"adds a missing newline", `printf 'no newline'`, "no newline\n", false, 0},
 		{"keeps the environment", `printf '%s' "$COLUMNS"`, "200\n", false, 0},
